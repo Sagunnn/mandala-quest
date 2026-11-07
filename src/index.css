@@ -66,3 +66,12 @@ input[type="range"] {
 @media (prefers-reduced-motion: reduce) {
   .mq-pulse, .mq-tick, .mq-dwelling, .mq-in, .mq-shake { animation: none; }
 }
+
+@keyframes mq-fence {
+  0% { stroke-opacity: 0.9; stroke-width: 0.4; }
+  100% { stroke-opacity: 0; stroke-width: 2.4; }
+}
+.mq-fence { animation: mq-fence 1.8s ease-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .mq-fence { animation: none; }
+}

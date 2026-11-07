@@ -1,15 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight,
-  Award, BookOpen, Check, CircleStop, Coins, Droplets, Footprints, Gauge, Landmark, Lock, LockOpen,
-  MapPin, Mountain, RefreshCw, RotateCcw, RotateCw, Satellite, ScrollText, Sparkles, Timer,
-  TriangleAlert, X,
+  Award, BookOpen, Check, CircleStop, Coins, Droplets, FileText, Flag, Footprints, Gauge, Hammer, HeartHandshake,
+  History, Landmark, Layers, Lock, LockOpen, MapPin, Mountain, RefreshCw, RotateCcw, RotateCw, Satellite,
+  ScanSearch, ScrollText, Sparkles, Store, Ticket, Timer, TriangleAlert, X, Zap,
 } from 'lucide-react';
 import {
   ALTITUDE_RANGE, BADGES, BARO, BOUDHA, BOUDHA_START, DWELL_SECONDS, EXIT_GRACE_TICKS, KALA, KORA_GOAL,
   MAX_WALK_SPEED, MONUMENTS, PATAN, RANKS, SECTOR_NAMES, TICK_MS, XP, Z_GATE, computeScore, distanceMeters,
   fromLocal, initialProgress, metersPerDegree, pressureHpa, stepDwell, stepKora, toLocal, zGatePassed,
+  CHARIOT, FESTIVAL, LANDMARKS, ROUTE_LENGTH, SHOP_ITEMS, chariotAt, chariotDistance, festivalBonus, normalizeProgress, stepChariot,
 } from './engine.js';
+import { BellIcon, ChariotGlyph, Column, Crowd, Elevation, GarudaPillar, GoldenDoor, MonumentGlyph, Statue } from './art.jsx';
+import { ARCHIVE, nepalSambat } from './archive.js';
+import { OSM_ATTRIBUTION, OSM_FEATURES } from './osm-patan.js';
 
 const STORAGE_KEY = 'mandala-quest-v1';
 const TRAIL_LENGTH = 90;
@@ -34,7 +38,7 @@ const STATUS_LABEL = {
 function loadProgress() {
   try {
     const s = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (s?.unlocked && s.riddles && s.kora?.visited?.length === BOUDHA.sectors) return s;
+    if (s?.unlocked && s.riddles && s.kora?.visited?.length === BOUDHA.sectors) return normalizeProgress(s);
   } catch {
     /* private window or blocked storage: start fresh */
   }
@@ -120,13 +124,26 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [card, setCard] = useState(null); // monument id or 'boudha'
   const [etiquette, setEtiquette] = useState(false);
+  const [layer, setLayer] = useState(() => {
+    try {
+      return localStorage.getItem('mandala-quest-layer') || 'blueprint';
+    } catch {
+      return 'blueprint';
+    }
+  });
+  const [jatra, setJatra] = useState(false);
+  const [jatraNow, setJatraNow] = useState(0); // seconds since the chariot set off
+  const [chariotLive, setChariotLive] = useState(null);
+  const [shopOpen, setShopOpen] = useState(false);
+  const jatraStartRef = useRef(0);
+  const chariotHoldRef = useRef({ t: 0, miss: 0 });
 
   const simPosRef = useRef(simPos);
   const keysRef = useRef(new Set());
   const watchRef = useRef(null);
   const lastTickRef = useRef({ time: 0, pos: {} });
   const state = useRef({});
-  state.current = { cluster, mode, walkSpeed, dz, target, dpad, gps, progress, dwell, koraLive, card };
+  state.current = { cluster, mode, walkSpeed, dz, target, dpad, gps, progress, dwell, koraLive, card, jatra, chariotLive, shopOpen };
 
   const setSimPos = useCallback((c, pos) => {
     simPosRef.current = { ...simPosRef.current, [c]: pos };
@@ -165,7 +182,7 @@ export default function App() {
     for (const id of score.badges) {
       if (!prev.badges.includes(id)) {
         const b = BADGES.find((x) => x.id === id);
-        toast({ kind: 'badge', title: `Badge earned · ${b.name}`, body: `+${KALA.badge} Kala Tokens`, ms: 5500 });
+        toast({ kind: 'badge', title: `Badge earned · ${b.name}`, body: b.reward ? `+${KALA.badge} Kala Tokens` : 'Thank you for keeping the hiti flowing', ms: 5500 });
       }
     }
   }, [score, toast]);
@@ -181,12 +198,15 @@ export default function App() {
       const last = lastTickRef.current.pos;
       const sp = {};
       const pos = {};
+      const vel = {};
       for (const c of ['patan', 'boudha']) {
         pos[c] = posFor(c, s);
         if (!pos[c]) continue;
         if (s.mode === 'live') sp[c] = s.gps.fix?.speed ?? 0;
         // The walker never goes faster than its slider; this drops frame-timing jitter around 2.0 m/s.
         else sp[c] = last[c] ? Math.min(s.walkSpeed, distanceMeters(last[c], pos[c]) / dt) : 0;
+        const d = last[c] ? toLocal(last[c], pos[c]) : { e: 0, n: 0 };
+        vel[c] = { e: d.e / dt, n: d.n / dt };
       }
       lastTickRef.current = { time: now, pos };
       setSpeeds({ patan: sp.patan ?? 0, boudha: sp.boudha ?? 0 });
@@ -203,6 +223,7 @@ export default function App() {
 
       const entries = [];
       let next = s.progress;
+      let earnedXp = 0;
 
       // Cluster A: point-in-polygon + dwell + barometric gate
       const d = stepDwell(s.dwell, { pos: pos.patan, speed: sp.patan, dz: s.dz, dt, unlocked: s.progress.unlocked });
@@ -215,7 +236,9 @@ export default function App() {
         for (const mid of d.newly) {
           const m = BY_ID[mid];
           const xp = XP.unlock + (m.zGate ? XP.zGateBonus : 0);
-          toast({ kind: 'unlock', title: `Unlocked · ${m.name}`, body: `+${xp} Punya · +${KALA.unlock} Kala${m.riddle ? ' · riddle waiting' : ''}` });
+          earnedXp += xp;
+          const boost = festivalBonus(s.progress, xp) ? ` (${FESTIVAL.multiplier}× festival)` : '';
+          toast({ kind: 'unlock', title: `Unlocked · ${m.name}`, body: `+${xp + festivalBonus(s.progress, xp)} Punya${boost} · +${KALA.unlock} Kala${m.riddle ? ' · riddle waiting' : ''}` });
         }
         if (!s.card) setCard(d.newly[0]);
       }
@@ -227,8 +250,12 @@ export default function App() {
       if (!k.live.inRing && wasIn) entries.push({ tone: 'muted', text: 'Left the kora ring: angle tracking paused' });
       if (k.live.tooFast && !s.koraLive?.tooFast) entries.push({ tone: 'warn', text: `Kora: ${fmt(sp.boudha)} m/s is faster than walking, so the angle is not counted` });
       for (const ev of k.events) {
-        if (ev.type === 'sector') entries.push({ tone: 'good', text: `Kora sector ${SECTOR_NAMES[ev.sector]} visited (+${XP.sector} Punya, +${KALA.sector} Kala)` });
+        if (ev.type === 'sector') {
+          earnedXp += XP.sector;
+          entries.push({ tone: 'good', text: `Kora sector ${SECTOR_NAMES[ev.sector]} visited (+${XP.sector} Punya, +${KALA.sector} Kala)` });
+        }
         if (ev.type === 'master') {
+          earnedXp += XP.koraMaster;
           entries.push({ tone: 'good', text: 'Kora complete: +360° clockwise' });
           toast({ kind: 'unlock', title: 'Kora complete · +360°', body: `+${XP.koraMaster} Punya · +${KALA.koraMaster} Kala`, ms: 5500 });
         }
@@ -239,11 +266,66 @@ export default function App() {
       }
       setKoraLive(k.live);
       if (k.kora !== next.kora) next = { ...next, kora: k.kora };
+
+      // Festival multiplier: XP earned while it runs counts 3x
+      const bonus = festivalBonus(s.progress, earnedXp);
+      if (bonus) {
+        next = { ...next, bonusXp: (next.bonusXp || 0) + bonus };
+        entries.push({ tone: 'good', text: `Festival ${FESTIVAL.multiplier}×: +${bonus} bonus Punya` });
+      }
+
+      // Live Jatra: the moving chariot geofence
+      if (s.jatra) {
+        const ch = chariotAt(chariotDistance((now - jatraStartRef.current) / 1000));
+        const r = stepChariot(chariotHoldRef.current, { pos: pos.patan, vel: vel.patan, chariot: ch, dt });
+        chariotHoldRef.current = r.hold;
+        const prevC = s.chariotLive;
+        if (r.inside && !prevC?.inside) entries.push({ tone: 'info', text: `Inside the chariot’s ${CHARIOT.radius} m circle: walk with it at ${CHARIOT.speed} m/s` });
+        if (!r.inside && prevC?.inside) entries.push({ tone: 'muted', text: 'Left the chariot’s circle' });
+        if (r.inPace && !prevC?.inPace) entries.push({ tone: 'info', text: 'In pace with Bungadyah: keep pulling' });
+        if (r.done) {
+          const first = !next.chariot;
+          next = { ...next, chariot: next.chariot || Date.now(), festivalUntil: Date.now() + FESTIVAL.seconds * 1000 };
+          entries.push({ tone: 'good', text: `You pulled with Bungadyah for ${CHARIOT.holdSeconds} s: ${FESTIVAL.multiplier}× Punya for ${FESTIVAL.seconds / 60} minutes` });
+          toast({ kind: 'rank', title: first ? 'Chariot Puller of Bungadyah' : 'Festival multiplier renewed', body: `${FESTIVAL.multiplier}× Punya for the next ${FESTIVAL.seconds / 60} minutes`, ms: 6000 });
+        }
+        setChariotLive({ inside: r.inside, inPace: r.inPace, distance: r.distance, rel: r.rel, t: r.done ? CHARIOT.holdSeconds : r.hold.t });
+      }
       if (next !== s.progress) setProgress(next);
       pushLog(entries);
     }, TICK_MS);
     return () => clearInterval(id);
   }, [posFor, pushLog, toast]);
+
+  // Moves the chariots on screen between the 1 Hz engine steps.
+  useEffect(() => {
+    if (!jatra) return undefined;
+    const id = setInterval(() => setJatraNow((performance.now() - jatraStartRef.current) / 1000), 200);
+    return () => clearInterval(id);
+  }, [jatra]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('mandala-quest-layer', layer);
+    } catch {
+      /* the layer choice just won't be remembered */
+    }
+  }, [layer]);
+
+  const toggleJatra = () => {
+    if (jatra) {
+      setJatra(false);
+      setChariotLive(null);
+      pushLog([{ tone: 'muted', text: 'Live Jatra ended' }]);
+      return;
+    }
+    jatraStartRef.current = performance.now();
+    chariotHoldRef.current = { t: 0, miss: 0 };
+    setJatraNow(0);
+    setJatra(true);
+    setCluster('patan');
+    pushLog([{ tone: 'info', text: `Live Jatra: Bungadyah sets off from Mangal Bazar toward Sundhara at ${CHARIOT.speed} m/s, with Minnath ahead` }]);
+  };
 
   // ------------------------------------------------ virtual walker movement (every frame)
 
@@ -385,10 +467,21 @@ export default function App() {
   const solveRiddle = (id, answer) => {
     const m = BY_ID[id];
     if (!m?.riddle || !m.riddle.check(answer)) return false;
-    setProgress((p) => ({ ...p, riddles: { ...p.riddles, [id]: Date.now() } }));
-    toast({ kind: 'unlock', title: `Riddle solved · ${m.name}`, body: `+${XP.riddle} Punya · +${KALA.riddle} Kala` });
+    const bonus = festivalBonus(progress, XP.riddle);
+    setProgress((p) => ({ ...p, riddles: { ...p.riddles, [id]: Date.now() }, bonusXp: (p.bonusXp || 0) + bonus }));
+    toast({ kind: 'unlock', title: `Riddle solved · ${m.name}`, body: `+${XP.riddle + bonus} Punya${bonus ? ` (${FESTIVAL.multiplier}× festival)` : ''} · +${KALA.riddle} Kala` });
     pushLog([{ tone: 'good', text: `Riddle solved at ${m.name}: “${m.riddle.answer}”` }]);
     return true;
+  };
+
+  const buy = (itemId, extra = {}) => {
+    const item = SHOP_ITEMS.find((i) => i.id === itemId);
+    if (!item || progress.shop[itemId] || score.kala < item.cost) return null;
+    const code = `MQ-DEMO-${Math.random().toString(36).slice(2, 6).toUpperCase()}${Date.now().toString(36).slice(-3).toUpperCase()}`;
+    const record = { ts: Date.now(), code, ...extra };
+    setProgress((p) => ({ ...p, shop: { ...p.shop, [itemId]: record } }));
+    pushLog([{ tone: 'good', text: `Kala shop: ${item.name} (−${item.cost} Kala)` }]);
+    return record;
   };
 
   const resetAll = () => {
@@ -404,6 +497,8 @@ export default function App() {
     setSimPos('boudha', BOUDHA_START);
     setTrail({ patan: [], boudha: [] });
     setDz(0);
+    setJatra(false);
+    setChariotLive(null);
     setLog([]);
     lastTickRef.current = { time: performance.now(), pos: {} };
   };
@@ -421,15 +516,20 @@ export default function App() {
 
   return (
     <div className="min-h-dvh pb-10">
-      <Hud score={score} onReset={resetAll} />
+      <Hud score={score} onReset={resetAll} onShop={() => setShopOpen(true)} festivalUntil={progress.festivalUntil} tick={tick} />
 
       <main className="mx-auto max-w-[1400px] px-4 pt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
         <section className="min-w-0 space-y-4">
           <ClusterTabs cluster={cluster} setCluster={setCluster} progress={progress} />
 
-          <div className={`relative overflow-hidden rounded-2xl border border-line ${cluster === 'patan' ? 'bg-[#e9dbbb]' : 'bg-[#e6d7b5]'}`}>
+          <div className={`overflow-hidden rounded-2xl border border-line ${cluster === 'patan' ? 'bg-[#e9dbbb]' : 'bg-[#e6d7b5]'}`}>
+            {cluster === 'patan' ? <MapToolbar layer={layer} setLayer={setLayer} jatra={jatra} onJatra={toggleJatra} /> : null}
+            <div className="relative">
             {cluster === 'patan' ? (
               <PatanMap
+                layer={layer}
+                jatra={jatra ? jatraNow : null}
+                chariotLive={chariotLive}
                 player={player}
                 heading={mode === 'live' ? gps.fix?.heading ?? 0 : heading.patan}
                 dwell={dwell}
@@ -462,10 +562,13 @@ export default function App() {
               zOpen={zOpen}
               koraLive={koraLive}
               kora={progress.kora}
+              chariotLive={jatra ? chariotLive : null}
+              layer={cluster === 'patan' ? layer : null}
               etiquette={etiquette}
               onDismissEtiquette={() => setEtiquette(false)}
               onUseSim={() => switchMode('sim')}
             />
+            </div>
           </div>
 
         </section>
@@ -503,6 +606,7 @@ export default function App() {
             insideId={insideId}
             dwell={dwell}
             koraLive={koraLive}
+            chariotLive={jatra && cluster === 'patan' ? chariotLive : null}
           />
 
           {cluster === 'patan' ? (
@@ -530,6 +634,8 @@ export default function App() {
       </main>
 
       <Toasts toasts={toasts} />
+
+      {shopOpen ? <ShopDrawer score={score} progress={progress} onBuy={buy} onClose={() => setShopOpen(false)} /> : null}
 
       {card && (
         <LoreCard
@@ -601,10 +707,11 @@ function MandalaMark({ size = 36 }) {
 
 // ---------------------------------------------------------------- HUD
 
-const BADGE_ICON = { hiti: Droplets, sthapati: Landmark, kora: RotateCw };
+const BADGE_ICON = { hiti: Droplets, sthapati: Landmark, kora: RotateCw, chariot: Flag, guthi: HeartHandshake };
 
-function Hud({ score, onReset }) {
+function Hud({ score, onReset, onShop, festivalUntil }) {
   const { rank, nextRank, xp, kala, badges } = score;
+  const festivalLeft = Math.max(0, Math.round(((festivalUntil || 0) - Date.now()) / 1000));
   const span = nextRank ? nextRank.xp - rank.xp : 1;
   const into = nextRank ? xp - rank.xp : 1;
   return (
@@ -638,11 +745,24 @@ function Hud({ score, onReset }) {
 
         <div className="flex items-center gap-2 sm:gap-4">
 
-          <div className="flex items-center gap-1.5 rounded-full border border-line bg-panel px-3 py-1.5" title="Kala Tokens">
+          {festivalLeft > 0 ? (
+            <span className="flex items-center gap-1 rounded-full bg-brick px-2.5 py-1.5 text-xs font-bold text-white" title="Festival multiplier: XP counts 3x">
+              <Zap size={13} aria-hidden />
+              {FESTIVAL.multiplier}× <span className="font-mono">{Math.floor(festivalLeft / 60)}:{String(festivalLeft % 60).padStart(2, '0')}</span>
+            </span>
+          ) : null}
+
+          <button
+            type="button"
+            onClick={onShop}
+            className="flex items-center gap-1.5 rounded-full border border-gold/50 bg-panel px-3 py-1.5 transition-colors hover:border-gold hover:bg-raised"
+            title="Kala Tokens: open the Heritage Rewards & Guthi shop"
+          >
             <Coins size={16} className="text-gold" aria-hidden />
             <span className="font-mono text-sm font-semibold">{kala}</span>
             <span className="text-xs text-muted">Kala</span>
-          </div>
+            <Store size={14} className="text-gold" aria-hidden />
+          </button>
 
           <div className="hidden items-center gap-1.5 sm:flex" aria-label="Badges">
             {BADGES.map((b) => {
@@ -777,26 +897,182 @@ function NorthArrow({ x, y }) {
   );
 }
 
-function PatanMap({ player, heading, dwell, unlocked, target, trail, accuracy, onTap }) {
+// ---------------------------------------------------------------- Patan map layers
+
+const LAYERS = [
+  { id: 'blueprint', label: 'Newa Parchment Blueprint', short: 'Blueprint' },
+  { id: 'osm', label: 'OpenStreetMap', short: 'OSM' },
+  { id: 'satellite', label: 'Satellite', short: 'Satellite' },
+];
+
+function MapToolbar({ layer, setLayer, jatra, onJatra }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-line bg-panel px-2 py-2">
+      <div className="flex items-center gap-1 rounded-lg bg-ink p-1" role="radiogroup" aria-label="Map layer">
+        <Layers size={14} className="mx-1 text-gold" aria-hidden />
+        {LAYERS.map((l) => (
+          <button
+            key={l.id}
+            type="button"
+            role="radio"
+            aria-checked={layer === l.id}
+            onClick={() => setLayer(l.id)}
+            title={l.label}
+            className={`rounded-md px-2.5 py-1 text-xs font-semibold transition-colors ${layer === l.id ? 'bg-gold text-ink' : 'text-muted hover:text-text'}`}
+          >
+            <span className="hidden md:inline">{l.label}</span>
+            <span className="md:hidden">{l.short}</span>
+          </button>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={onJatra}
+        aria-pressed={jatra}
+        className={`ml-auto flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors ${jatra ? 'border-brick bg-brick text-white' : 'border-line text-muted hover:border-brick hover:text-text'}`}
+      >
+        <Flag size={14} aria-hidden />
+        <span className="hidden sm:inline">Live Jatra: Rato Machhindranath</span>
+        <span className="sm:hidden">Live Jatra</span>
+        <span className={`ml-1 rounded px-1 font-mono text-[10px] ${jatra ? 'bg-white/20' : 'bg-raised'}`}>{jatra ? 'ON' : 'OFF'}</span>
+      </button>
+    </div>
+  );
+}
+
+const ringPath = (rings, to) =>
+  rings.map((r) => r.map(([lon, lat], i) => `${i ? 'L' : 'M'}${to({ lat, lon }).map((v) => v.toFixed(2)).join(' ')}`).join('') + 'Z').join('');
+const linePoints = (line, to) => line.map(([lon, lat]) => to({ lat, lon }).map((v) => v.toFixed(2)).join(',')).join(' ');
+const linePath = (line, to) => line.map(([lon, lat], i) => `${i ? 'L' : 'M'}${to({ lat, lon }).map((v) => v.toFixed(2)).join(' ')}`).join('');
+
+const BLUEPRINT_STYLE = {
+  green: { fill: '#c9d2a0', stroke: '#8e9a62' },
+  water: { fill: '#9cc3cf', stroke: '#4d8496' },
+  plinth: { fill: '#d8c8a1', stroke: '#8c7650' },
+  plaza: { fill: 'url(#herringbone)', stroke: '#9b7c4e' },
+  house: { fill: '#e0cfa9', stroke: '#a38b62' },
+  temple: { fill: '#d3c096', stroke: '#8c7650' },
+  palace: { fill: '#b5653f', stroke: '#6e3216' },
+  column: { fill: '#bea97b', stroke: '#5e5134' },
+};
+const STREET_WIDTH = { street: 6, lane: 3.6, path: 1.4 };
+const STREET_LABELS = { 'Mangalbazar Marg': 'Mangal Bazar Marg', 'Hakha Marg': 'Hakha Marg → Sundhara', 'Mha Maru Galli': 'Mha Maru Galli' };
+
+/** Building footprints, the brick plaza and streets from OpenStreetMap. Static, so drawn once. */
+const BlueprintBase = memo(function BlueprintBase() {
+  const P = PROJ.patan;
+  const grid = [];
+  for (let x = 10; x < P.w; x += 10) grid.push(<line key={`x${x}`} x1={x} y1="0" x2={x} y2={P.h} />);
+  for (let y = 10; y < P.h; y += 10) grid.push(<line key={`y${y}`} x1="0" y1={y} x2={P.w} y2={y} />);
+  const streets = OSM_FEATURES.filter((f) => f.line);
+  return (
+    <g>
+      <rect width={P.w} height={P.h} fill="#efe2c4" />
+      <g stroke="#d9c7a1" strokeWidth="0.12">{grid}</g>
+      {OSM_FEATURES.filter((f) => f.rings && ['green', 'water', 'plinth', 'plaza'].includes(f.kind)).map((f) => (
+        <path key={f.id} d={ringPath(f.rings, P.to)} fill={BLUEPRINT_STYLE[f.kind].fill} stroke={BLUEPRINT_STYLE[f.kind].stroke} strokeWidth="0.25" fillRule="evenodd" />
+      ))}
+      {streets.map((f) => (
+        <polyline key={`${f.id}c`} points={linePoints(f.line, P.to)} fill="none" stroke="#b9a27a" strokeWidth={STREET_WIDTH[f.kind] + 0.6} strokeLinecap="round" strokeLinejoin="round" />
+      ))}
+      {streets.map((f) => (
+        <polyline key={f.id} points={linePoints(f.line, P.to)} fill="none" stroke={f.kind === 'path' ? '#e8dab9' : '#f6eedc'} strokeWidth={STREET_WIDTH[f.kind]} strokeLinecap="round" strokeLinejoin="round" />
+      ))}
+      {OSM_FEATURES.filter((f) => f.rings && ['house', 'temple', 'palace', 'column'].includes(f.kind)).map((f) => (
+        <path key={f.id} d={ringPath(f.rings, P.to)} fill={BLUEPRINT_STYLE[f.kind].fill} stroke={BLUEPRINT_STYLE[f.kind].stroke} strokeWidth={f.kind === 'palace' ? 0.35 : 0.2} fillRule="evenodd" />
+      ))}
+      {/* palace roofs: a ridge line just inside the outer wall */}
+      {OSM_FEATURES.filter((f) => f.kind === 'palace' && f.rings.length > 1).map((f) => (
+        <path key={`${f.id}r`} d={ringPath(f.rings, P.to)} fill="none" stroke="#8a3f22" strokeWidth="2.2" strokeOpacity="0.35" fillRule="evenodd" />
+      ))}
+      <g fontSize="2.3" fontWeight="600" fill="#5a4630" stroke="#f6eedc" strokeWidth="0.6" paintOrder="stroke" letterSpacing="0.15">
+        {streets.filter((f) => STREET_LABELS[f.name]).map((f) => (
+          <g key={`${f.id}l`}>
+            <path id={`st-${f.id}`} d={linePath(f.line, P.to)} fill="none" stroke="none" />
+            <text dy="0.8">
+              <textPath href={`#st-${f.id}`} startOffset={f.name === 'Mangalbazar Marg' ? '62%' : '8%'}>
+                {STREET_LABELS[f.name]}
+              </textPath>
+            </text>
+          </g>
+        ))}
+      </g>
+      <g pointerEvents="none" fontWeight="700" letterSpacing="0.4" stroke="#efe2c4" strokeWidth="0.5" paintOrder="stroke">
+        <text x="87.6" y="96" fontSize="2.1" fill="#7a5a2e" transform="rotate(-78.35 87.6 96)" textAnchor="middle">
+          DURBAR SQUARE · BRICK PLAZA
+        </text>
+        <text x="121.5" y="112" fontSize="2.3" fill="#6e3216" transform="rotate(-78.35 121.5 112)" textAnchor="middle">
+          ROYAL PALACE · MALLA DURBAR
+        </text>
+      </g>
+    </g>
+  );
+});
+
+// Web Mercator tiles at zoom 19, placed with the same projection as everything else on the map.
+const TILE_Z = 19;
+const TILE_SOURCES = {
+  osm: { url: (x, y) => `https://tile.openstreetmap.org/${TILE_Z}/${x}/${y}.png`, credit: '© OpenStreetMap contributors', href: 'https://www.openstreetmap.org/copyright' },
+  satellite: {
+    url: (x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${TILE_Z}/${y}/${x}`,
+    credit: 'Imagery © Esri, Maxar, Earthstar Geographics',
+    href: 'https://www.esri.com/',
+  },
+};
+const tileX = (lon) => ((lon + 180) / 360) * 2 ** TILE_Z;
+const tileY = (lat) => ((1 - Math.asinh(Math.tan((lat * Math.PI) / 180)) / Math.PI) / 2) * 2 ** TILE_Z;
+const tileLon = (x) => (x / 2 ** TILE_Z) * 360 - 180;
+const tileLat = (y) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / 2 ** TILE_Z))) * 180) / Math.PI;
+
+const TileLayer = memo(function TileLayer({ source }) {
+  const P = PROJ.patan;
+  const b = PATAN.bounds;
+  const src = TILE_SOURCES[source];
+  const tiles = [];
+  for (let x = Math.floor(tileX(b.lonMin)); x <= Math.floor(tileX(b.lonMax)); x++) {
+    for (let y = Math.floor(tileY(b.latMax)); y <= Math.floor(tileY(b.latMin)); y++) {
+      const [x0, y0] = P.to({ lat: tileLat(y), lon: tileLon(x) });
+      const [x1, y1] = P.to({ lat: tileLat(y + 1), lon: tileLon(x + 1) });
+      tiles.push(<image key={`${x}-${y}`} href={src.url(x, y)} x={x0} y={y0} width={x1 - x0 + 0.05} height={y1 - y0 + 0.05} preserveAspectRatio="none" />);
+    }
+  }
+  return (
+    <g>
+      <rect width={P.w} height={P.h} fill={source === 'satellite' ? '#2a2620' : '#f2efe9'} />
+      {tiles}
+    </g>
+  );
+});
+
+function PatanMap({ layer, jatra, chariotLive, player, heading, dwell, unlocked, target, trail, accuracy, onTap }) {
   const P = PROJ.patan;
   const tap = makeSvgTap(onTap, P.from);
   const pxy = player ? P.to(player) : null;
   const inView = pxy && pxy[0] >= 0 && pxy[0] <= P.w && pxy[1] >= 0 && pxy[1] <= P.h;
-  const grid = [];
-  for (let x = 10; x < P.w; x += 10) grid.push(<line key={`x${x}`} x1={x} y1="0" x2={x} y2={P.h} />);
-  for (let y = 10; y < P.h; y += 10) grid.push(<line key={`y${y}`} x1="0" y1={y} x2={P.w} y2={y} />);
+  const blueprint = layer === 'blueprint';
+  const onTiles = !blueprint;
+  const labelFill = onTiles && layer === 'satellite' ? '#fff8e8' : '#2b2016';
+  const labelHalo = onTiles && layer === 'satellite' ? '#14100c' : '#efe2c4';
+
+  let chariot = null;
+  if (jatra != null) {
+    const sB = chariotDistance(jatra);
+    const sM = sB + CHARIOT.minnathLead;
+    chariot = { b: chariotAt(sB), m: sM <= ROUTE_LENGTH ? chariotAt(sM) : null };
+  }
+
   return (
     <svg
       viewBox={`0 0 ${P.w.toFixed(2)} ${P.h.toFixed(2)}`}
       className={`mx-auto block h-auto max-h-[72vh] w-full touch-none select-none ${onTap ? 'cursor-crosshair' : ''}`}
       onPointerDown={tap}
       role="img"
-      aria-label="Map of Patan Durbar Square with monument geofences and your position"
+      aria-label="Map of Patan Durbar Square: the brick plaza, the royal palace, monument geofences and your position"
     >
       <defs>
-        <pattern id="brick" width="4" height="2" patternUnits="userSpaceOnUse">
-          <rect width="4" height="2" fill="#e9dbbb" />
-          <path d="M0 0H4M0 1H4M1 0V1M3 1V2" stroke="#d8c59f" strokeWidth="0.12" />
+        <pattern id="herringbone" width="2" height="2" patternUnits="userSpaceOnUse" patternTransform="rotate(11.65)">
+          <rect width="2" height="2" fill="#dcb98b" />
+          <path d="M0 0.5H1V0M1 2V1.5H2M1 1H2V0.5M0 1.5H1V1" fill="none" stroke="#b98d5c" strokeWidth="0.1" />
         </pattern>
         <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
           <feGaussianBlur stdDeviation="1.2" result="b" />
@@ -805,69 +1081,80 @@ function PatanMap({ player, heading, dwell, unlocked, target, trail, accuracy, o
             <feMergeNode in="SourceGraphic" />
           </feMerge>
         </filter>
+        <filter id="muted">
+          <feColorMatrix type="saturate" values="0.3" />
+        </filter>
       </defs>
-      <rect width={P.w} height={P.h} fill="url(#brick)" />
-      <g stroke="#c8b48b" strokeWidth="0.15">{grid}</g>
+
+      {blueprint ? <BlueprintBase /> : <TileLayer source={layer} />}
+
+      {/* landmarks */}
+      {blueprint ? (
+        <g pointerEvents="none">
+          <GarudaPillar x={P.to(LANDMARKS.garuda.pos)[0]} y={P.to(LANDMARKS.garuda.pos)[1]} />
+          <Column x={P.to(LANDMARKS.column.pos)[0]} y={P.to(LANDMARKS.column.pos)[1]} />
+          <BellIcon x={P.to(LANDMARKS.bell.pos)[0]} y={P.to(LANDMARKS.bell.pos)[1]} />
+        </g>
+      ) : null}
 
       {MONUMENTS.map((m) => {
         const st = dwell[m.id];
         const isOpen = !!unlocked[m.id];
-        const k = KIND_STYLE[m.kind];
+        const pts = m.obb.map(([lon, lat]) => P.to({ lat, lon }));
+        const xs = pts.map((p) => p[0]);
+        const ys = pts.map((p) => p[1]);
+        const box = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
         const [cx, cy] = P.to(m.centroid);
-        const top = Math.min(...m.obb.map(([lon, lat]) => P.to({ lat, lon })[1]));
-        const bottom = Math.max(...m.obb.map(([lon, lat]) => P.to({ lat, lon })[1]));
         const big = m.kind === 'courtyard' || m.id === 'LAL1220';
-        const labelY = big ? top + 3.4 : bottom + 3;
+        const labelY = big ? box.y + 3.4 : box.y + box.h + 3;
         const progress = st && !isOpen ? st.t / DWELL_SECONDS : 0;
         const ringColor = st?.status === 'too-fast' || st?.status === 'need-descent' ? '#c4532f' : '#e3a93f';
         return (
           <g key={m.id}>
+            {blueprint ? (
+              <g filter={isOpen ? undefined : 'url(#muted)'} opacity={isOpen ? 1 : 0.85}>
+                <MonumentGlyph m={m} box={box} project={P.to} />
+              </g>
+            ) : null}
             <polygon
-              points={polyPoints(m.obb, P.to)}
-              fill={k.fill}
-              fillOpacity={isOpen ? 0.95 : m.kind === 'courtyard' ? 0.35 : 0.55}
-              stroke={isOpen ? '#e3a93f' : k.stroke}
-              strokeWidth={isOpen ? 0.9 : 0.45}
+              points={pts.map((p) => p.join(',')).join(' ')}
+              fill={isOpen ? '#e3a93f' : onTiles ? '#efe2c4' : 'none'}
+              fillOpacity={isOpen ? 0.18 : 0.12}
+              stroke={isOpen ? '#e3a93f' : onTiles ? '#fff3d6' : '#5a3a1e'}
+              strokeWidth={isOpen ? 0.8 : 0.45}
               strokeDasharray={isOpen ? undefined : '1.2 0.8'}
               filter={isOpen ? 'url(#glow)' : undefined}
               className={st?.status === 'dwelling' ? 'mq-dwelling' : undefined}
             />
-            {m.kind === 'pagoda' || m.kind === 'shikhara' ? (
-              <rect x={cx - 2} y={cy - 2} width="4" height="4" fill="none" stroke={isOpen ? '#7a4a12' : k.stroke} strokeOpacity="0.6" strokeWidth="0.3" transform={m.kind === 'shikhara' ? `rotate(45 ${cx} ${cy})` : undefined} />
-            ) : null}
             {progress > 0 ? (
               <g transform={`rotate(-90 ${cx} ${cy})`}>
-                <circle cx={cx} cy={cy} r="3.4" fill="#14100c" fillOpacity="0.45" />
-                <circle
-                  cx={cx}
-                  cy={cy}
-                  r="3.4"
-                  fill="none"
-                  stroke={ringColor}
-                  strokeWidth="0.9"
-                  pathLength="100"
-                  strokeDasharray={`${progress * 100} 100`}
-                />
+                <circle cx={cx} cy={cy} r="3.4" fill="#14100c" fillOpacity="0.5" />
+                <circle cx={cx} cy={cy} r="3.4" fill="none" stroke={ringColor} strokeWidth="0.9" pathLength="100" strokeDasharray={`${progress * 100} 100`} />
               </g>
             ) : null}
-            {isOpen ? <Sparkles x={cx - 1.6} y={cy - 1.6} width="3.2" height="3.2" color="#5a3608" strokeWidth={2.4} /> : progress > 0 ? null : <Lock x={cx - 1.3} y={cy - 1.3} width="2.6" height="2.6" color="#3b2e22" strokeWidth={2.2} opacity="0.7" />}
-            <text
-              x={cx}
-              y={labelY}
-              textAnchor="middle"
-              fontSize="2.5"
-              fontWeight="600"
-              fill="#2b2016"
-              stroke="#efe2c4"
-              strokeWidth="0.7"
-              paintOrder="stroke"
-              pointerEvents="none"
-            >
+            {!isOpen && !progress && onTiles ? <Lock x={cx - 1.3} y={cy - 1.3} width="2.6" height="2.6" color="#fff3d6" strokeWidth={2.2} /> : null}
+            <text x={cx} y={labelY} textAnchor="middle" fontSize="2.5" fontWeight="700" fill={labelFill} stroke={labelHalo} strokeWidth="0.7" paintOrder="stroke" pointerEvents="none">
+              {isOpen ? '✦ ' : ''}
               {m.id === 'LAL1220' ? 'Sundari Chowk' : m.id === 'LAL1270' ? 'Taleju (N)' : m.name.replace(' Temple', '')}
             </text>
           </g>
         );
       })}
+
+      {/* palace details that sit on top of the courtyards */}
+      <g pointerEvents="none">
+        {blueprint ? <Statue x={P.to(LANDMARKS.ganga.pos)[0]} y={P.to(LANDMARKS.ganga.pos)[1]} /> : null}
+        {blueprint ? <Statue x={P.to(LANDMARKS.yamuna.pos)[0]} y={P.to(LANDMARKS.yamuna.pos)[1]} /> : null}
+        <GoldenDoor x={P.to(LANDMARKS.goldenDoor.pos)[0]} y={P.to(LANDMARKS.goldenDoor.pos)[1]} />
+        <g fontSize="1.9" fontWeight="600" fill={labelFill} stroke={labelHalo} strokeWidth="0.55" paintOrder="stroke">
+          <text x={P.to(LANDMARKS.goldenDoor.pos)[0] - 2.4} y={P.to(LANDMARKS.goldenDoor.pos)[1] + 0.7} textAnchor="end">Golden Door</text>
+          <text x={P.to(LANDMARKS.bell.pos)[0] - 2.8} y={P.to(LANDMARKS.bell.pos)[1] + 0.7} textAnchor="end">Taleju Bell</text>
+          <text x={P.to(LANDMARKS.garuda.pos)[0] + 1.8} y={P.to(LANDMARKS.garuda.pos)[1] + 0.7}>Garuda</text>
+          <text x={P.to(LANDMARKS.column.pos)[0] - 1.8} y={P.to(LANDMARKS.column.pos)[1] + 0.7} textAnchor="end">Yoganarendra column</text>
+        </g>
+      </g>
+
+      {chariot ? <ChariotLayer chariot={chariot} live={chariotLive} to={P.to} t={jatra} /> : null}
 
       <Trail points={trail} to={P.to} />
       <Target from={pxy} to={target ? P.to(target) : null} />
@@ -875,6 +1162,32 @@ function PatanMap({ player, heading, dwell, unlocked, target, trail, accuracy, o
       <ScaleBar x={4} y={P.h - 4} />
       <NorthArrow x={P.w - 6} y={8} />
     </svg>
+  );
+}
+
+function ChariotLayer({ chariot, live, to, t }) {
+  const route = CHARIOT.route.map((p) => to(p).map((v) => v.toFixed(2)).join(',')).join(' ');
+  const [bx, by] = to(chariot.b.pos);
+  const pulling = live?.inPace;
+  return (
+    <g pointerEvents="none">
+      <polyline points={route} fill="none" stroke="#c4322a" strokeWidth="0.6" strokeDasharray="1.6 1.2" strokeOpacity="0.75" />
+      <circle cx={bx} cy={by} r={CHARIOT.radius} fill="#e3a93f" fillOpacity={pulling ? 0.22 : 0.1} stroke="#e3a93f" strokeWidth="0.6" />
+      <circle cx={bx} cy={by} r={CHARIOT.radius} fill="none" stroke="#f3cd7e" strokeWidth="0.4" className="mq-fence" />
+      {chariot.m ? (
+        <g>
+          <ChariotGlyph x={to(chariot.m.pos)[0]} y={to(chariot.m.pos)[1]} bearing={chariot.m.bearing} scale={0.55} small />
+          <text x={to(chariot.m.pos)[0]} y={to(chariot.m.pos)[1] - 5} textAnchor="middle" fontSize="2" fontWeight="700" fill="#7a1e14" stroke="#fff3d6" strokeWidth="0.5" paintOrder="stroke">
+            Minnath
+          </text>
+        </g>
+      ) : null}
+      <Crowd x={bx} y={by} bearing={chariot.b.bearing} seed={Math.floor(t)} />
+      <ChariotGlyph x={bx} y={by} bearing={chariot.b.bearing} />
+      <text x={bx} y={by + CHARIOT.radius + 3} textAnchor="middle" fontSize="2.3" fontWeight="700" fill="#7a1e14" stroke="#fff3d6" strokeWidth="0.6" paintOrder="stroke">
+        Bungadyah · Rato Machhindranath
+      </text>
+    </g>
   );
 }
 
@@ -971,8 +1284,14 @@ function BoudhaMap({ player, heading, kora, koraLive, target, trail, accuracy, o
   );
 }
 
-function MapOverlay({ cluster, mode, gps, farFromSite, insideId, dwell, speed, zOpen, koraLive, kora, etiquette, onDismissEtiquette, onUseSim }) {
+function MapOverlay({ cluster, mode, gps, farFromSite, insideId, dwell, speed, zOpen, koraLive, kora, chariotLive, layer, etiquette, onDismissEtiquette, onUseSim }) {
   let chip = null;
+  let chariotChip = null;
+  if (cluster === 'patan' && chariotLive?.inside) {
+    chariotChip = chariotLive.inPace
+      ? { tone: 'good', title: 'Pulling with Bungadyah', detail: `${Math.min(CHARIOT.holdSeconds, Math.floor(chariotLive.t))}/${CHARIOT.holdSeconds} s` }
+      : { tone: 'warn', title: 'Chariot circle', detail: `Walk ${CHARIOT.speed} m/s SE · off by ${fmt(chariotLive.rel, 1)}` };
+  }
   if (cluster === 'patan' && insideId) {
     const m = BY_ID[insideId];
     const st = dwell[insideId];
@@ -1007,13 +1326,26 @@ function MapOverlay({ cluster, mode, gps, farFromSite, insideId, dwell, speed, z
             Tap the map to walk there · arrows / WASD
           </span>
         ) : null}
-        {chip ? (
-          <span className={`mq-in w-fit rounded-xl border bg-ink/90 px-3 py-1.5 text-sm ${toneCls[chip.tone]}`}>
-            <span className="font-semibold">{chip.title}</span>
-            {chip.detail ? <span className="ml-2 font-mono text-xs opacity-90">{chip.detail}</span> : null}
+        {[chip, chariotChip].filter(Boolean).map((c) => (
+          <span key={c.title} className={`mq-in w-fit rounded-xl border bg-ink/90 px-3 py-1.5 text-sm ${toneCls[c.tone]}`}>
+            <span className="font-semibold">{c.title}</span>
+            {c.detail ? <span className="ml-2 font-mono text-xs opacity-90">{c.detail}</span> : null}
           </span>
-        ) : null}
+        ))}
       </div>
+
+      {layer ? (
+        <div className="absolute bottom-1 right-1 rounded bg-ink/70 px-1.5 py-0.5 text-[10px] text-muted">
+          {layer === 'satellite' ? (
+            <>
+              <a href={TILE_SOURCES.satellite.href} target="_blank" rel="noreferrer" className="hover:text-text">{TILE_SOURCES.satellite.credit}</a> ·{' '}
+            </>
+          ) : null}
+          <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer" className="hover:text-text">
+            {OSM_ATTRIBUTION}
+          </a>
+        </div>
+      ) : null}
 
       {mode === 'live' && (gps.status === 'waiting' || (gps.fix && farFromSite > 300)) ? (
         <div className="absolute inset-x-3 bottom-3 rounded-xl border border-line bg-ink/92 p-3 text-sm sm:inset-x-auto sm:right-3 sm:max-w-sm">
@@ -1219,7 +1551,7 @@ function AltitudeControl({ dz, setDz, pressure, zOpen, live }) {
   );
 }
 
-function Telemetry({ tick, player, speed, dz, pressure, cluster, insideId, dwell, koraLive }) {
+function Telemetry({ tick, player, speed, dz, pressure, cluster, insideId, dwell, koraLive, chariotLive }) {
   const rows = [
     ['Lat', player ? player.lat.toFixed(6) : '—'],
     ['Lon', player ? player.lon.toFixed(6) : '—'],
@@ -1231,6 +1563,10 @@ function Telemetry({ tick, player, speed, dz, pressure, cluster, insideId, dwell
     const st = insideId ? dwell[insideId] : null;
     rows.push(['PIP', insideId ? `inside ${insideId}` : 'outside all']);
     rows.push(['Dwell', st && st.status !== 'unlocked' ? `${fmt(st.t, 0)}/${DWELL_SECONDS} s · ${STATUS_LABEL[st.status]}` : '—']);
+    if (chariotLive) {
+      rows.push(['Chariot', `${fmt(chariotLive.distance, 1)} m · ${chariotLive.inside ? 'inside' : 'outside'} ${CHARIOT.radius} m`]);
+      rows.push(['Pace Δv', `${fmt(chariotLive.rel, 2)} m/s (≤ ${CHARIOT.paceTolerance})`]);
+    }
   } else {
     rows.push(['Radius', koraLive ? `${fmt(koraLive.r, 1)} m` : '—']);
     rows.push(['Bearing', koraLive ? `${fmt(koraLive.bearing, 0)}°` : '—']);
@@ -1366,26 +1702,33 @@ function KoraPanel({ kora, koraLive, speed, onOpen }) {
 }
 
 function BadgesPanel({ score, progress }) {
+  const status = (b, on) => {
+    if (on) return 'Earned';
+    if (b.needs) return `${b.needs.filter((id) => progress.unlocked[id]).length}/${b.needs.length}`;
+    if (b.id === 'kora') return `${Math.max(0, Math.min(360, Math.round(progress.kora.theta)))}/360°`;
+    if (b.id === 'chariot') return 'Seasonal · Live Jatra';
+    if (b.id === 'guthi') return 'Kala shop';
+    return '';
+  };
   return (
     <Panel>
       <PanelTitle icon={Award}>Badges & ranks</PanelTitle>
-      <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
         {BADGES.map((b) => {
           const Icon = BADGE_ICON[b.id];
           const on = score.badges.includes(b.id);
-          const have = b.kora ? Math.max(0, Math.min(360, Math.round(progress.kora.theta))) : b.needs.filter((id) => progress.unlocked[id]).length;
-          const need = b.kora ? 360 : b.needs.length;
           return (
             <div key={b.id} className={`flex gap-3 rounded-xl border p-3 ${on ? 'border-gold/70 bg-gold/10' : 'border-line bg-ink/40'}`}>
               <span className={`grid size-10 shrink-0 place-items-center rounded-full ${on ? 'bg-gold text-ink' : 'bg-raised text-faint'}`}>
                 <Icon size={18} aria-hidden />
               </span>
               <div className="min-w-0">
-                <div className={`text-sm font-semibold ${on ? 'text-gold-soft' : ''}`}>{b.name}</div>
-                <div className="text-xs text-muted">{b.how}</div>
-                <div className="mt-1 font-mono text-[11px] text-faint">
-                  {on ? 'Earned' : `${have}/${need}${b.kora ? '°' : ''}`}
+                <div className={`text-sm font-semibold ${on ? 'text-gold-soft' : ''}`}>
+                  {b.name}
+                  {b.seasonal ? <span className="ml-1.5 rounded bg-brick/25 px-1 align-middle text-[10px] font-semibold text-[#f0a080]">SEASONAL</span> : null}
                 </div>
+                <div className="text-xs text-muted">{b.how}</div>
+                <div className="mt-1 font-mono text-[11px] text-faint">{status(b, on)}</div>
               </div>
             </div>
           );
@@ -1465,12 +1808,20 @@ function EventLog({ log }) {
 
 // ---------------------------------------------------------------- lore card modal
 
+const CARD_TABS = [
+  { id: 'record', label: 'Record', icon: FileText },
+  { id: 'compare', label: '1970 vs 2026', icon: History },
+  { id: 'inspect', label: 'Inspector', icon: ScanSearch },
+];
+
 function LoreCard({ id, progress, player, canWalk, onWalk, onSolve, onClose }) {
   const isBoudha = id === 'boudha';
   const m = isBoudha ? null : BY_ID[id];
   const open = isBoudha ? progress.kora.visited.some(Boolean) : !!progress.unlocked[id];
   const lore = isBoudha ? BOUDHA.lore : m.lore;
+  const rec = ARCHIVE[id];
   const dist = player ? distanceMeters(player, isBoudha ? BOUDHA.center : m.centroid) : null;
+  const [tab, setTab] = useState('record');
   const ref = useRef(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -1484,9 +1835,17 @@ function LoreCard({ id, progress, player, canWalk, onWalk, onSolve, onClose }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [id]);
 
+  const facts = [
+    ['DANAM ID', isBoudha ? lore.id : m.id],
+    ['Built', [rec.built.label, nepalSambat(rec.built.ce)].filter(Boolean).join(' · ')],
+    ['Patron', isBoudha ? '—' : lore.patron],
+    ['Typology', rec.typology],
+    ['Restoration', rec.restoration || 'Not recorded in this prototype'],
+  ];
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-end bg-black/60 p-0 sm:place-items-center sm:p-4" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="lore-title" className="mq-in max-h-[92dvh] w-full overflow-y-auto rounded-t-3xl border border-gold/40 bg-panel outline-none sm:max-w-lg sm:rounded-3xl">
+      <div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="lore-title" className="mq-in max-h-[92dvh] w-full overflow-y-auto rounded-t-3xl border border-gold/40 bg-panel outline-none sm:max-w-2xl sm:rounded-3xl">
         <div className="relative border-b border-line bg-gradient-to-br from-[#3a2614] to-panel px-5 pb-4 pt-5">
           <button type="button" onClick={onClose} className="absolute right-3 top-3 grid size-8 place-items-center rounded-full text-muted hover:bg-ink hover:text-text" aria-label="Close">
             <X size={18} />
@@ -1506,12 +1865,27 @@ function LoreCard({ id, progress, player, canWalk, onWalk, onSolve, onClose }) {
             {lore.era}
             {lore.patron ? ` · ${lore.patron}` : ''}
           </p>
+          {open ? (
+            <div className="mt-4 flex gap-1 rounded-xl bg-ink/60 p-1" role="tablist">
+              {CARD_TABS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === t.id}
+                  onClick={() => setTab(t.id)}
+                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-semibold transition-colors ${tab === t.id ? 'bg-gold text-ink' : 'text-muted hover:text-text'}`}
+                >
+                  <t.icon size={14} aria-hidden />
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div className="space-y-3 px-5 py-4 text-sm leading-relaxed">
-          {open ? (
-            lore.body.map((p, i) => <p key={i}>{p}</p>)
-          ) : (
+          {!open ? (
             <div className="rounded-xl border border-dashed border-line bg-ink/40 p-4">
               <p className="flex items-center gap-2 font-semibold">
                 <Lock size={16} className="text-gold" aria-hidden /> Card locked
@@ -1529,11 +1903,232 @@ function LoreCard({ id, progress, player, canWalk, onWalk, onSolve, onClose }) {
                 </button>
               ) : null}
             </div>
+          ) : tab === 'record' ? (
+            <>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 rounded-xl border border-line bg-ink/40 p-3 text-xs">
+                {facts.map(([k, v]) => (
+                  <div key={k} className="contents">
+                    <dt className="text-muted">{k}</dt>
+                    <dd className={k === 'DANAM ID' ? 'font-mono text-gold-soft' : ''}>{v}</dd>
+                  </div>
+                ))}
+              </dl>
+              {lore.body.map((p, i) => (
+                <p key={i}>{p}</p>
+              ))}
+              {m?.riddle ? <Riddle m={m} solved={!!progress.riddles[m.id]} onSolve={onSolve} /> : null}
+            </>
+          ) : tab === 'compare' ? (
+            <ThenAndNow id={id} restoration={rec.restoration} />
+          ) : (
+            <Inspector id={id} items={rec.inspector} solved={!m?.riddle || !!progress.riddles[m.id]} />
           )}
-
-          {open && m?.riddle ? <Riddle m={m} solved={!!progress.riddles[m.id]} onSolve={onSolve} /> : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+function ThenAndNow({ id, restoration }) {
+  const [split, setSplit] = useState(50);
+  const boxRef = useRef(null);
+  const dragging = useRef(false);
+  const fromPointer = (e) => {
+    const r = boxRef.current.getBoundingClientRect();
+    setSplit(Math.round(Math.min(100, Math.max(0, ((e.clientX - r.left) / r.width) * 100))));
+  };
+  return (
+    <div>
+      <div
+        ref={boxRef}
+        className="relative aspect-[4/3] w-full cursor-ew-resize touch-none select-none overflow-hidden rounded-xl border border-line"
+        onPointerDown={(e) => {
+          dragging.current = true;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          fromPointer(e);
+        }}
+        onPointerMove={(e) => dragging.current && fromPointer(e)}
+        onPointerUp={() => {
+          dragging.current = false;
+        }}
+      >
+        <Elevation id={id} mode="today" className="absolute inset-0 h-full w-full" />
+        <div className="absolute inset-0" style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}>
+          <Elevation id={id} mode="ink" className="h-full w-full" />
+        </div>
+        <div className="pointer-events-none absolute inset-y-0 w-0.5 bg-gold" style={{ left: `${split}%` }}>
+          <span className="absolute top-1/2 grid size-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-gold text-[11px] font-bold text-ink shadow">⇆</span>
+        </div>
+        <span className="pointer-events-none absolute left-2 top-2 rounded bg-[#2f4a6b] px-1.5 py-0.5 text-[10px] font-semibold text-white">c. 1970 survey</span>
+        <span className="pointer-events-none absolute right-2 top-2 rounded bg-ink/80 px-1.5 py-0.5 text-[10px] font-semibold text-gold-soft">2026</span>
+      </div>
+      <input type="range" min="0" max="100" value={split} onChange={(e) => setSplit(Number(e.target.value))} aria-label="Compare the 1970s drawing with today" className="mt-2 w-full" />
+      <p className="mt-1 text-xs text-muted">{restoration || 'No restoration record for this building in the prototype.'}</p>
+      <p className="mt-2 text-[11px] text-faint">
+        Both drawings were made for this prototype. The left one imitates the line style of 1970s survey work such as Wolfgang Korn’s and Carl Pruscha’s. It is not a reproduction of their
+        archival sheets.
+      </p>
+    </div>
+  );
+}
+
+function Inspector({ id, items, solved }) {
+  const [sel, setSel] = useState(items[0]?.id);
+  const hidden = (i) => i.spoiler && !solved;
+  return (
+    <div>
+      <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl border border-line">
+        <Elevation id={id} mode="today" className="h-full w-full" />
+        {items.map((i, n) => (
+          <button
+            key={i.id}
+            type="button"
+            onClick={() => setSel(i.id)}
+            aria-label={hidden(i) ? 'Hidden until the riddle is solved' : i.label}
+            className={`absolute grid size-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 text-xs font-bold shadow transition-transform hover:scale-110 ${sel === i.id ? 'border-white bg-brick text-white' : 'border-ink bg-gold text-ink'}`}
+            style={{ left: `${(i.x / 200) * 100}%`, top: `${(i.y / 150) * 100}%` }}
+          >
+            {n + 1}
+          </button>
+        ))}
+      </div>
+      <ol className="mt-3 space-y-1.5">
+        {items.map((i, n) => (
+          <li key={i.id}>
+            <button
+              type="button"
+              onClick={() => setSel(i.id)}
+              className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${sel === i.id ? 'border-gold/70 bg-gold/10' : 'border-line hover:bg-raised'}`}
+            >
+              <span className="text-xs font-semibold text-gold-soft">
+                {n + 1}. {hidden(i) ? 'Locked detail' : i.label}
+              </span>
+              {sel === i.id ? <span className="mt-0.5 block text-sm">{hidden(i) ? 'Solve this monument’s riddle to reveal this carving.' : i.text}</span> : null}
+            </button>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Kala shop
+
+const SHOP_ICON = { cafe: Ticket, workshop: Hammer, donation: HeartHandshake };
+
+function ShopDrawer({ score, progress, onBuy, onClose }) {
+  const [pay, setPay] = useState(null); // donation intent shown before confirming
+  const [ref] = useState(() => `MQ-INT-${Date.now().toString(36).toUpperCase()}`);
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/60" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
+      <aside role="dialog" aria-modal="true" aria-labelledby="shop-title" className="mq-in flex h-full w-full max-w-md flex-col border-l border-gold/40 bg-panel">
+        <div className="border-b border-line bg-gradient-to-br from-[#3a2614] to-panel px-5 py-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 id="shop-title" className="font-display text-xl font-semibold">Lalitpur Heritage Rewards & Guthi Drawer</h2>
+              <p className="mt-1 text-xs text-muted">Spend the Kala Tokens you earn at monuments.</p>
+            </div>
+            <button type="button" onClick={onClose} className="grid size-8 shrink-0 place-items-center rounded-full text-muted hover:bg-ink hover:text-text" aria-label="Close">
+              <X size={18} />
+            </button>
+          </div>
+          <div className="mt-3 flex items-center gap-2 text-sm">
+            <Coins size={18} className="text-gold" aria-hidden />
+            <span className="font-mono text-lg font-semibold">{score.kala}</span>
+            <span className="text-muted">Kala available</span>
+            <span className="ml-auto text-xs text-faint">
+              {score.kalaEarned} earned · {score.spent} spent
+            </span>
+          </div>
+        </div>
+
+        <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
+          <p className="rounded-lg border border-brick/50 bg-brick/10 px-3 py-2 text-xs text-[#f0c0a8]">
+            Prototype. These rewards are samples: vouchers are not redeemable at any business, and the donation is simulated. No money moves.
+          </p>
+
+          {SHOP_ITEMS.map((item) => {
+            const Icon = SHOP_ICON[item.id];
+            const owned = progress.shop[item.id];
+            const short = score.kala < item.cost;
+            return (
+              <div key={item.id} className={`rounded-2xl border p-4 ${owned ? 'border-gold/60 bg-gold/5' : 'border-line bg-ink/40'}`}>
+                <div className="flex gap-3">
+                  <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-raised text-gold">
+                    <Icon size={20} aria-hidden />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold">{item.name}</div>
+                    <div className="text-xs text-muted">{item.detail}</div>
+                  </div>
+                  <span className="shrink-0 font-mono text-sm font-semibold text-gold-soft">{item.cost}</span>
+                </div>
+
+                {owned ? (
+                  item.kind === 'voucher' ? (
+                    <div className="relative mt-3 overflow-hidden rounded-xl border border-dashed border-gold/60 bg-[#2a1d12] p-3">
+                      <span className="pointer-events-none absolute -right-3 top-3 rotate-12 rounded bg-brick px-6 py-0.5 text-[10px] font-bold tracking-widest text-white">DEMO</span>
+                      <div className="text-[10px] uppercase tracking-wider text-muted">Voucher code</div>
+                      <div className="font-mono text-base font-semibold tracking-wider text-gold-soft">{owned.code}</div>
+                      <div className="mt-1 text-[11px] text-faint">Sample only · not redeemable · issued {new Date(owned.ts).toLocaleDateString()}</div>
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-xl border border-jade/50 bg-jade/10 p-3 text-xs">
+                      <div className="flex items-center gap-1.5 font-semibold text-jade">
+                        <Check size={14} aria-hidden /> Simulated donation recorded
+                      </div>
+                      <div className="mt-1 font-mono text-faint">
+                        {owned.wallet} · {owned.code}
+                      </div>
+                      <div className="mt-1 text-muted">Badge unlocked: Living Guthi Patron</div>
+                    </div>
+                  )
+                ) : item.kind === 'donation' && pay ? (
+                  <div className="mt-3 rounded-xl border border-line bg-panel p-3 text-xs">
+                    <div className="font-semibold">Simulated payment intent</div>
+                    <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                      <dt className="text-muted">Payee</dt>
+                      <dd>Manga Hiti Water Conservation Guthi (sample)</dd>
+                      <dt className="text-muted">Amount</dt>
+                      <dd className="font-mono">{item.cost} Kala</dd>
+                      <dt className="text-muted">Purpose</dt>
+                      <dd>Hiti channel upkeep</dd>
+                      <dt className="text-muted">Reference</dt>
+                      <dd className="font-mono">{ref}</dd>
+                    </dl>
+                    <p className="mt-2 text-faint">Nothing is sent to eSewa or Khalti. In a real build, this step would hand off to the wallet app.</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {['eSewa', 'Khalti'].map((w) => (
+                        <button key={w} type="button" onClick={() => onBuy(item.id, { wallet: `Simulated ${w}` }) && setPay(null)} className="rounded-lg bg-gold px-3 py-1.5 font-semibold text-ink">
+                          Simulate {w}
+                        </button>
+                      ))}
+                      <button type="button" onClick={() => setPay(null)} className="rounded-lg border border-line px-3 py-1.5 text-muted hover:text-text">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={short}
+                    onClick={() => (item.kind === 'donation' ? setPay(true) : onBuy(item.id))}
+                    className="mt-3 w-full rounded-lg bg-gold px-3 py-2 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:bg-raised disabled:text-faint"
+                  >
+                    {short ? `Need ${item.cost - score.kala} more Kala` : item.kind === 'donation' ? `Donate ${item.cost} Kala` : `Get for ${item.cost} Kala`}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </aside>
     </div>
   );
 }

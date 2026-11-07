@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CHARIOT, FESTIVAL, LANDMARKS, ROUTE_LENGTH, SHOP_ITEMS, chariotAt, chariotDistance, festivalBonus, normalizeProgress, stepChariot, toLocal,
   BOUDHA, BOUDHA_START, DWELL_SECONDS, MAX_XP, MONUMENTS, PATAN, RANKS,
   angleDelta, computeScore, distanceMeters, fromLocal, initialKora, initialProgress,
   pointInPolygon, pressureHpa, stepDwell, stepKora, zGatePassed,
@@ -160,4 +161,70 @@ test('riddle answers', () => {
   assert.ok(byId.LAL1350.riddle.check('Two Elephants'));
   assert.ok(byId.LAL1350.riddle.check('elephant'));
   assert.ok(!byId.LAL1350.riddle.check('lions'));
+});
+
+test('moved boxes contain their OpenStreetMap features', () => {
+  const inBox = (id, p) => pointInPolygon([p.lon, p.lat], byId[id].obb);
+  assert.ok(inBox('LAL1260', LANDMARKS.ganga.pos), 'Ganga statue in Mul Chowk');
+  assert.ok(inBox('LAL1260', LANDMARKS.yamuna.pos), 'Yamuna statue in Mul Chowk');
+  assert.ok(inBox('LAL1220', LANDMARKS.tusaHiti.pos), 'Tusa Hiti in Sundari Chowk');
+  assert.ok(inBox('LAL1360', { lat: 27.673523, lon: 85.325535 }), 'Manga Hiti spout');
+});
+
+test('chariot route stays on the map and runs at 0.4 m/s', () => {
+  const b = PATAN.bounds;
+  for (const p of CHARIOT.route) assert.ok(p.lat >= b.latMin && p.lat <= b.latMax && p.lon >= b.lonMin && p.lon <= b.lonMax);
+  assert.ok(ROUTE_LENGTH > 90 && ROUTE_LENGTH < 130, `${ROUTE_LENGTH}`);
+  const c = chariotAt(10);
+  assert.ok(Math.abs(Math.hypot(c.vel.e, c.vel.n) - 0.4) < 1e-9);
+  assert.ok(c.bearing > 100 && c.bearing < 160, 'heads south-east toward Sundhara');
+  assert.ok(chariotDistance(ROUTE_LENGTH / 0.4 + 5) < 3, 'loops');
+});
+
+const pull = (ticks, velFn, offset = 5) => {
+  let hold = { t: 0, miss: 0 };
+  let done = false;
+  for (let i = 0; i < ticks; i++) {
+    const chariot = chariotAt(20 + i * 0.4);
+    const pos = fromLocal(chariot.pos, offset, 0);
+    const r = stepChariot(hold, { pos, vel: velFn(chariot), chariot, dt: 1 });
+    hold = r.hold;
+    done = done || r.done;
+  }
+  return done;
+};
+
+test('chariot pull: 6 s in pace inside 15 m completes, standing still does not', () => {
+  assert.equal(pull(5, (c) => c.vel), false);
+  assert.equal(pull(6, (c) => c.vel), true);
+  assert.equal(pull(20, () => ({ e: 0, n: 0 })), false);
+  assert.equal(pull(20, (c) => c.vel, 16), false, 'outside the 15 m geofence');
+  assert.equal(pull(20, (c) => ({ e: c.vel.e * 3, n: c.vel.n * 3 })), false, 'too fast');
+});
+
+test('festival multiplier triples XP while it runs', () => {
+  const p = { ...initialProgress(), festivalUntil: 10_000 };
+  assert.equal(festivalBonus(p, 100, 5_000), 100 * (FESTIVAL.multiplier - 1));
+  assert.equal(festivalBonus(p, 100, 20_000), 0);
+  const s = computeScore({ ...initialProgress(), bonusXp: 200 });
+  assert.equal(s.xp, 200);
+});
+
+test('shop: spending lowers Kala; the donation earns Living Guthi Patron', () => {
+  const p = initialProgress();
+  for (const m of MONUMENTS) p.unlocked[m.id] = 1;
+  const before = computeScore(p);
+  p.shop.donation = { ts: 1 };
+  const after = computeScore(p);
+  const cost = SHOP_ITEMS.find((i) => i.id === 'donation').cost;
+  assert.equal(after.kala, before.kala - cost);
+  assert.ok(after.badges.includes('guthi'));
+});
+
+test('old saves gain the new fields', () => {
+  const old = { unlocked: { LAL1340: 1 }, riddles: {}, kora: initialKora() };
+  const p = normalizeProgress(old);
+  assert.deepEqual(p.shop, {});
+  assert.equal(p.bonusXp, 0);
+  assert.equal(computeScore(p).xp, 100);
 });

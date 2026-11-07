@@ -222,8 +222,10 @@ export const MONUMENTS = [
     nepali: 'मूल चोक',
     kind: 'courtyard',
     typeLabel: 'Royal Courtyard',
-    centroid: { lat: 27.67318, lon: 85.32447 },
-    obb: [[85.324338, 27.673063], [85.324602, 27.673063], [85.324602, 27.673297], [85.324338, 27.673297]],
+    // Moved onto OpenStreetMap (the Ganga and Yamuna statues at its Taleju door). The brief had it
+    // ~80 m west, at [27.67318, 85.32447]. Box size unchanged.
+    centroid: { lat: 27.67298, lon: 85.32525 },
+    obb: [[85.325118, 27.672863], [85.325382, 27.672863], [85.325382, 27.673097], [85.325118, 27.673097]],
     lore: {
       era: '1660s CE',
       patron: 'Siddhi Narasimha and Srinivasa Malla',
@@ -239,8 +241,10 @@ export const MONUMENTS = [
     nepali: 'सुन्दरी चोक र तुषा हिटी',
     kind: 'hiti',
     typeLabel: 'Royal Courtyard + Sunken Bath',
-    centroid: { lat: 27.6727, lon: 85.32452 },
-    obb: [[85.324409, 27.672601], [85.324631, 27.672601], [85.324631, 27.672799], [85.324409, 27.672799]],
+    // Moved onto OpenStreetMap (Sundari Chowk / Tusha Hiti). The brief had it ~61 m west, at
+    // [27.67270, 85.32452]. Box size unchanged.
+    centroid: { lat: 27.672717, lon: 85.325137 },
+    obb: [[85.325026, 27.672618], [85.325248, 27.672618], [85.325248, 27.672816], [85.325026, 27.672816]],
     zGate: true,
     lore: {
       era: '1647 CE',
@@ -257,8 +261,10 @@ export const MONUMENTS = [
     nepali: 'मंगः हिटी',
     kind: 'hiti',
     typeLabel: 'Sunken Stone Spout',
-    centroid: { lat: 27.67365, lon: 85.32551 },
-    obb: [[85.325439, 27.673587], [85.325581, 27.673587], [85.325581, 27.673713], [85.325439, 27.673713]],
+    // Moved onto OpenStreetMap's Manga Hiti point. The brief had it ~14 m north, at
+    // [27.67365, 85.32551], which left the real spout outside the box. Box size unchanged.
+    centroid: { lat: 27.673523, lon: 85.325535 },
+    obb: [[85.325464, 27.67346], [85.325606, 27.67346], [85.325606, 27.673586], [85.325464, 27.673586]],
     zGate: true,
     lore: {
       era: '570 CE',
@@ -271,6 +277,17 @@ export const MONUMENTS = [
     },
   },
 ];
+
+/** Points drawn on the Patan map (no geofence). Positions from OpenStreetMap. */
+export const LANDMARKS = {
+  garuda: { name: 'Garuda pillar', pos: { lat: 27.673598, lon: 85.325062 } },
+  column: { name: 'Yoganarendra Malla column', pos: { lat: 27.673293, lon: 85.325017 } },
+  bell: { name: 'Taleju Bell', pos: { lat: 27.673038, lon: 85.324907 } },
+  goldenDoor: { name: 'Golden Door (Sun Dhoka)', pos: { lat: 27.6734, lon: 85.325205 } },
+  tusaHiti: { name: 'Tusa Hiti', pos: { lat: 27.672722, lon: 85.325134 } },
+  ganga: { name: 'Ganga on a makara', pos: { lat: 27.672921, lon: 85.325137 } },
+  yamuna: { name: 'Yamuna on a tortoise', pos: { lat: 27.6729, lon: 85.325229 } },
+};
 
 // ---------------------------------------------------------------- Cluster B: Boudhanath kora
 
@@ -400,6 +417,114 @@ export function stepKora(kora, last, { pos, speed }) {
 
 // ---------------------------------------------------------------- scoring
 
+// ---------------------------------------------------------------- Live Jatra: the moving chariot geofence
+
+/**
+ * Rato Machhindranath (Bungadyah) chariot event. The route follows Mangal Bazar Marg to the south
+ * tip of the plaza, then Hakha Marg toward Sundhara (OpenStreetMap geometry, clipped to the map).
+ * Pull with the chariot: stay within 15 m and match its velocity for 6 s.
+ */
+export const CHARIOT = {
+  speed: 0.4, // m/s
+  radius: 15, // m
+  paceTolerance: 0.3, // m/s: how far your velocity may differ from the chariot's
+  holdSeconds: 6,
+  graceTicks: 1,
+  minnathLead: 25, // m: the smaller Minnath chariot goes ahead
+  route: [
+    { lat: 27.673199, lon: 85.3242 },
+    { lat: 27.673082, lon: 85.32438 },
+    { lat: 27.672842, lon: 85.324753 },
+    { lat: 27.672694, lon: 85.324908 },
+    { lat: 27.672623, lon: 85.324968 },
+    { lat: 27.672526, lon: 85.32503 },
+    { lat: 27.6725, lon: 85.325049 },
+  ],
+};
+export const FESTIVAL = { multiplier: 3, seconds: 180 };
+
+const ROUTE_SEGMENTS = CHARIOT.route.slice(1).map((b, i) => {
+  const a = CHARIOT.route[i];
+  const { e, n } = toLocal(a, b);
+  return { a, e, n, len: Math.hypot(e, n) };
+});
+export const ROUTE_LENGTH = ROUTE_SEGMENTS.reduce((s, g) => s + g.len, 0);
+
+/** Position, compass bearing and velocity (m/s east/north) at distance `s` along the route. */
+export function chariotAt(s) {
+  let d = Math.max(0, Math.min(ROUTE_LENGTH, s));
+  for (const g of ROUTE_SEGMENTS) {
+    if (d <= g.len || g === ROUTE_SEGMENTS[ROUTE_SEGMENTS.length - 1]) {
+      const t = g.len ? Math.min(1, d / g.len) : 0;
+      const ue = g.e / g.len;
+      const un = g.n / g.len;
+      return {
+        pos: fromLocal(g.a, g.e * t, g.n * t),
+        bearing: ((Math.atan2(g.e, g.n) * 180) / Math.PI + 360) % 360,
+        vel: { e: ue * CHARIOT.speed, n: un * CHARIOT.speed },
+      };
+    }
+    d -= g.len;
+  }
+  return null;
+}
+
+/** Distance along the route of Bungadyah `seconds` after the event starts (it loops). */
+export function chariotDistance(seconds) {
+  return (seconds * CHARIOT.speed) % ROUTE_LENGTH;
+}
+
+/**
+ * One 1 Hz step of the chariot pull. hold: { t, miss }. Returns the next hold, whether the player is
+ * inside the moving geofence and in pace, and done = true on the step the 6 s are reached.
+ */
+export function stepChariot(hold, { pos, vel, chariot, dt }) {
+  const distance = distanceMeters(chariot.pos, pos);
+  const inside = distance <= CHARIOT.radius;
+  const rel = Math.hypot(vel.e - chariot.vel.e, vel.n - chariot.vel.n);
+  const inPace = inside && rel <= CHARIOT.paceTolerance;
+  let { t, miss } = hold;
+  if (inPace) {
+    t += dt;
+    miss = 0;
+  } else if (t > 0 && miss < CHARIOT.graceTicks) {
+    miss += 1;
+  } else {
+    t = 0;
+    miss = 0;
+  }
+  const done = t >= CHARIOT.holdSeconds;
+  return { hold: done ? { t: 0, miss: 0 } : { t, miss }, distance, inside, inPace, rel, done };
+}
+
+// ---------------------------------------------------------------- Kala shop
+
+export const SHOP_ITEMS = [
+  {
+    id: 'cafe',
+    name: 'Pimbahal Rooftop Cafe Voucher',
+    detail: '−15% via Fonepay QR',
+    cost: 25,
+    kind: 'voucher',
+  },
+  {
+    id: 'workshop',
+    name: 'Okubahal Lost-Wax Metalcraft Workshop Pass',
+    detail: 'One session with a bronze-casting family',
+    cost: 50,
+    kind: 'voucher',
+  },
+  {
+    id: 'donation',
+    name: 'Micro-donation to the Manga Hiti Water Conservation Guthi',
+    detail: 'Simulated eSewa / Khalti payment intent · unlocks “Living Guthi Patron”',
+    cost: 30,
+    kind: 'donation',
+  },
+];
+
+// ---------------------------------------------------------------- scoring
+
 export const XP = { unlock: 100, zGateBonus: 50, riddle: 75, sector: 10, koraMaster: 300 };
 export const KALA = { unlock: 10, riddle: 15, sector: 2, koraMaster: 50, badge: 25 };
 
@@ -417,22 +542,50 @@ export const BADGES = [
     name: 'Hiti Hydrologist',
     how: 'Descend into both sunken water spouts: Manga Hiti and Tusa Hiti.',
     needs: ['LAL1360', 'LAL1220'],
+    reward: true,
   },
   {
     id: 'sthapati',
     name: 'Sthapati of Shikhara & Pagoda',
     how: 'Unlock the stone Shikhara and all three pagoda temples.',
     needs: ['LAL1340', 'LAL1350', 'LAL1380', 'LAL1320'],
+    reward: true,
   },
-  { id: 'kora', name: 'Mandala Kora Master', how: 'Walk one full clockwise kora (+360°) around Boudhanath.', kora: true },
+  { id: 'kora', name: 'Mandala Kora Master', how: 'Walk one full clockwise kora (+360°) around Boudhanath.', test: (p) => p.kora.master, reward: true },
+  {
+    id: 'chariot',
+    name: 'Chariot Puller of Bungadyah (2027 Barha Barsa)',
+    how: 'Seasonal: walk in pace with the Rato Machhindranath chariot for 6 s during the Live Jatra.',
+    test: (p) => !!p.chariot,
+    seasonal: true,
+    reward: true,
+  },
+  {
+    id: 'guthi',
+    name: 'Living Guthi Patron',
+    how: 'Make the micro-donation to the Manga Hiti Water Conservation Guthi in the Kala shop.',
+    test: (p) => !!p.shop.donation,
+    reward: false, // bought with Kala, so it pays no Kala back
+  },
 ];
 
 export function initialProgress() {
-  return { unlocked: {}, riddles: {}, kora: initialKora() };
+  return { unlocked: {}, riddles: {}, kora: initialKora(), shop: {}, bonusXp: 0, chariot: null, festivalUntil: 0 };
+}
+
+/** Fills in fields added after a save was written. */
+export function normalizeProgress(p) {
+  const base = initialProgress();
+  return { ...base, ...p, kora: { ...base.kora, ...p.kora }, shop: { ...(p.shop || {}) } };
+}
+
+/** XP to add on top when something is earned while the festival multiplier runs. */
+export function festivalBonus(progress, xp, now = Date.now()) {
+  return now < (progress.festivalUntil || 0) ? xp * (FESTIVAL.multiplier - 1) : 0;
 }
 
 export function computeScore(progress) {
-  let xp = 0;
+  let xp = progress.bonusXp || 0;
   let kala = 0;
   for (const m of MONUMENTS) {
     if (progress.unlocked[m.id]) {
@@ -451,11 +604,13 @@ export function computeScore(progress) {
     xp += XP.koraMaster;
     kala += KALA.koraMaster;
   }
-  const badges = BADGES.filter((b) => (b.kora ? progress.kora.master : b.needs.every((id) => progress.unlocked[id]))).map((b) => b.id);
-  kala += badges.length * KALA.badge;
+  const earned = BADGES.filter((b) => (b.test ? b.test(progress) : b.needs.every((id) => progress.unlocked[id])));
+  const badges = earned.map((b) => b.id);
+  kala += earned.filter((b) => b.reward).length * KALA.badge;
+  const spent = SHOP_ITEMS.filter((i) => progress.shop[i.id]).reduce((s, i) => s + i.cost, 0);
   const rank = [...RANKS].reverse().find((r) => xp >= r.xp);
   const nextRank = RANKS.find((r) => r.xp > xp) || null;
-  return { xp, kala, badges, rank, nextRank };
+  return { xp, kala: kala - spent, kalaEarned: kala, spent, badges, rank, nextRank };
 }
 
 export const MAX_XP =

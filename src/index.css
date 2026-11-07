@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+/* Dusk in the valley: brick, gilt and lamp-black, with parchment maps. */
+@theme {
+  --color-ink: #14100c;
+  --color-panel: #1e1813;
+  --color-raised: #28201a;
+  --color-line: #3a2f26;
+  --color-text: #f4ead7;
+  --color-muted: #a8977f;
+  --color-faint: #6f6252;
+  --color-gold: #e3a93f;
+  --color-gold-soft: #f3cd7e;
+  --color-brick: #c4532f;
+  --color-water: #4fa6c9;
+  --color-jade: #67b783;
+  --color-parch: #efe2c4;
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ink);
+  color: var(--color-text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+input[type="range"] {
+  accent-color: var(--color-gold);
+}
+
+@keyframes mq-pulse {
+  0% { r: 1.6; opacity: 0.7; }
+  100% { r: 6; opacity: 0; }
+}
+.mq-pulse { animation: mq-pulse 1.6s ease-out infinite; }
+
+@keyframes mq-tick {
+  0% { opacity: 1; transform: scale(1.4); }
+  100% { opacity: 0.35; transform: scale(1); }
+}
+.mq-tick { animation: mq-tick 0.9s ease-out forwards; }
+
+@keyframes mq-glow {
+  50% { stroke-opacity: 0.35; }
+}
+.mq-dwelling { animation: mq-glow 1s ease-in-out infinite; }
+
+@keyframes mq-in {
+  from { opacity: 0; transform: translateY(-8px); }
+}
+.mq-in { animation: mq-in 0.25s ease-out; }
+
+@keyframes mq-shake {
+  20%, 60% { transform: translateX(-5px); }
+  40%, 80% { transform: translateX(5px); }
+}
+.mq-shake { animation: mq-shake 0.35s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mq-pulse, .mq-tick, .mq-dwelling, .mq-in, .mq-shake { animation: none; }
+}

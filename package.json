@@ -1,0 +1,27 @@
+{
+  "name": "mandala-quest",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Mandala Quest: Chronicles of the Living Valley — a GPS-only heritage game prototype for Patan Durbar Square and the Boudhanath kora (mandala-quest.sagunpradhan.com.np)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "dependencies": {
+    "lucide-react": "^1.70.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@vitejs/plugin-react": "^6.2.1",
+    "tailwindcss": "^4.3.5",
+    "vite": "^8.3.6"
+  }
+}

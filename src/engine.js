@@ -261,10 +261,11 @@ export const MONUMENTS = [
     nepali: 'मंगः हिटी',
     kind: 'hiti',
     typeLabel: 'Sunken Stone Spout',
-    // Moved onto OpenStreetMap's Manga Hiti point. The brief had it ~14 m north, at
-    // [27.67365, 85.32551], which left the real spout outside the box. Box size unchanged.
-    centroid: { lat: 27.673523, lon: 85.325535 },
-    obb: [[85.325464, 27.67346], [85.325606, 27.67346], [85.325606, 27.673586], [85.325464, 27.673586]],
+    // As in the brief: the sunken basin just north of Keshav Narayan Chowk, with its steps coming
+    // in from the west past the two Mani Mandapa pavilions (both mapped in OpenStreetMap).
+    // OSM's "Manga Hiti" point sits ~13 m south of the basin, inside the palace wing.
+    centroid: { lat: 27.67365, lon: 85.32551 },
+    obb: [[85.325439, 27.673587], [85.325581, 27.673587], [85.325581, 27.673713], [85.325439, 27.673713]],
     zGate: true,
     lore: {
       era: '570 CE',
@@ -284,6 +285,8 @@ export const LANDMARKS = {
   column: { name: 'Yoganarendra Malla column', pos: { lat: 27.673293, lon: 85.325017 } },
   bell: { name: 'Taleju Bell', pos: { lat: 27.673038, lon: 85.324907 } },
   goldenDoor: { name: 'Golden Door (Sun Dhoka)', pos: { lat: 27.6734, lon: 85.325205 } },
+  maniMandapa: { name: 'Mani Mandapa', pos: { lat: 27.673669, lon: 85.325323 } },
+  hitiSteps: { name: 'Steps down to Manga Hiti', pos: { lat: 27.673656, lon: 85.325405 } },
   tusaHiti: { name: 'Tusa Hiti', pos: { lat: 27.672722, lon: 85.325134 } },
   ganga: { name: 'Ganga on a makara', pos: { lat: 27.672921, lon: 85.325137 } },
   yamuna: { name: 'Yamuna on a tortoise', pos: { lat: 27.6729, lon: 85.325229 } },

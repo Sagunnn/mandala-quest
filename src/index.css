@@ -2,20 +2,21 @@
 
 /* Dusk in the valley: brick, gilt and lamp-black, with parchment maps. */
 @theme {
-  --color-ink: #14100c;
-  --color-panel: #1e1813;
-  --color-raised: #28201a;
-  --color-line: #3a2f26;
-  --color-text: #f4ead7;
-  --color-muted: #a8977f;
-  --color-faint: #6f6252;
-  --color-gold: #e3a93f;
-  --color-gold-soft: #f3cd7e;
-  --color-brick: #c4532f;
-  --color-water: #4fa6c9;
-  --color-jade: #67b783;
+  --color-ink: #12152a;
+  --color-panel: #1f2547;
+  --color-raised: #2b3263;
+  --color-line: #3f4886;
+  --color-text: #f4f1e6;
+  --color-muted: #b0b5d6;
+  --color-faint: #7a80ad;
+  --color-gold: #f2b53a;
+  --color-gold-soft: #f6d77a;
+  --color-brick: #d0432f;
+  --color-water: #5bb8e6;
+  --color-jade: #6fd38f;
   --color-parch: #efe2c4;
-  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-display: "Press Start 2P", ui-monospace, monospace;
+  --font-sans: "Pixelify Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
@@ -25,9 +26,11 @@
 
 body {
   margin: 0;
-  background: var(--color-ink);
+  background-color: var(--color-ink);
+  background-image: radial-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size: 8px 8px;
   color: var(--color-text);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-sans);
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -74,4 +77,107 @@ input[type="range"] {
 .mq-fence { animation: mq-fence 1.8s ease-out infinite; }
 @media (prefers-reduced-motion: reduce) {
   .mq-fence { animation: none; }
+}
+
+/* ---------------------------------------------------------------- handheld console */
+
+.pixelated {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.gb-shell {
+  border-radius: 28px 28px 72px 28px;
+  background: linear-gradient(160deg, #d8473c 0%, #b8322a 55%, #9c2722 100%);
+  box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.25), inset 0 -6px 0 rgba(0, 0, 0, 0.25), 0 14px 0 #6e1a16, 0 24px 40px rgba(0, 0, 0, 0.45);
+}
+@media (max-width: 767px) {
+  .gb-shell { border-radius: 24px 24px 56px 24px; }
+}
+
+.gb-bezel {
+  border-radius: 12px 12px 36px 12px;
+  background: #2e3142;
+  padding: 10px 14px 16px;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.6);
+}
+
+.gb-dpad {
+  display: grid;
+  place-items: center;
+  background: #23252f;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.12), 0 3px 0 #0f1015;
+}
+.gb-dpad:active { transform: translateY(2px); box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.08); }
+
+.gb-round {
+  display: grid;
+  place-items: center;
+  width: 3.4rem;
+  height: 3.4rem;
+  border-radius: 9999px;
+  color: #f4e9ff;
+  font-family: var(--font-display);
+  font-size: 13px;
+  box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.25), 0 4px 0 #3a1550;
+}
+.gb-round:active { transform: translateY(3px); box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.15); }
+
+.gb-pill {
+  width: 3.6rem;
+  height: 0.85rem;
+  border-radius: 9999px;
+  background: #5b5f6e;
+  transform: rotate(-22deg);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.25), 0 2px 0 #2a2c34;
+}
+.gb-pill:active { background: #464955; }
+
+.gb-shoulder {
+  position: absolute;
+  top: -12px;
+  height: 22px;
+  min-width: 5.5rem;
+  padding: 0 14px;
+  border-radius: 14px 14px 4px 4px;
+  background: #7f1e19;
+  color: #ffd9d2;
+  font-family: var(--font-display);
+  font-size: 10px;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.2);
+}
+.gb-shoulder:active { background: #61160f; }
+
+/* the classic white text box with a navy double border */
+.gb-box {
+  background: #fbfaf2;
+  color: #1b1f2f;
+  border: 3px solid #2b3a67;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 2px #fbfaf2, inset 0 0 0 4px #8fa1d8, 0 3px 0 rgba(0, 0, 0, 0.35);
+  font-family: var(--font-sans);
+}
+
+.gb-plate {
+  display: inline-block;
+  background: #fbfaf2;
+  color: #1b1f2f;
+  border: 2px solid #2b3a67;
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
+}
+
+@media (max-width: 639px) {
+  .gb-plate { font-size: 10px; padding: 2px 5px; }
+}
+
+@keyframes gb-blink { 50% { opacity: 0; } }
+.gb-blink { animation: gb-blink 0.8s steps(1) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .gb-blink { animation: none; }
 }

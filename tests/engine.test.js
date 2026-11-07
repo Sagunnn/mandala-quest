@@ -163,12 +163,16 @@ test('riddle answers', () => {
   assert.ok(!byId.LAL1350.riddle.check('lions'));
 });
 
-test('moved boxes contain their OpenStreetMap features', () => {
+test('boxes contain their OpenStreetMap features', () => {
   const inBox = (id, p) => pointInPolygon([p.lon, p.lat], byId[id].obb);
   assert.ok(inBox('LAL1260', LANDMARKS.ganga.pos), 'Ganga statue in Mul Chowk');
   assert.ok(inBox('LAL1260', LANDMARKS.yamuna.pos), 'Yamuna statue in Mul Chowk');
   assert.ok(inBox('LAL1220', LANDMARKS.tusaHiti.pos), 'Tusa Hiti in Sundari Chowk');
-  assert.ok(inBox('LAL1360', { lat: 27.673523, lon: 85.325535 }), 'Manga Hiti spout');
+  const steps = LANDMARKS.hitiSteps.pos;
+  const westEdge = byId.LAL1360.obb[0][0];
+  assert.ok(steps.lat > byId.LAL1360.obb[0][1] && steps.lat < byId.LAL1360.obb[2][1], 'steps reach the basin at its latitude');
+  assert.ok(distanceMeters(steps, { lat: steps.lat, lon: westEdge }) < 4, 'steps end at the basin edge');
+  assert.ok(!inBox('LAL1330', byId.LAL1360.centroid), 'Manga Hiti is north of Keshav Narayan Chowk, not inside it');
 });
 
 test('chariot route stays on the map and runs at 0.4 m/s', () => {

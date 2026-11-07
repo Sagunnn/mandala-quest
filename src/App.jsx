@@ -7,7 +7,7 @@ import {
   toLocal, zGatePassed,
 } from './engine.js';
 import { PROJ, clampToMap } from './view.js';
-import { BadgePage, DexPage, Hud, MENU, Screen, Shell, StartMenu, TILE_SOURCES, TextBox } from './Console.jsx';
+import { BadgePage, DexPage, GameFrame, Hud, MENU, Screen, StartMenu, TILE_SOURCES, TextBox } from './Game.jsx';
 import {
   AltitudeControl, EventLog, GpsStatus, KoraPanel, LoreCard, ModeSwitch, Panel, PanelTitle, STATUS_LABEL, ShopDrawer, Telemetry, fmt, fmtDist,
 } from './panels.jsx';
@@ -122,8 +122,8 @@ export default function App() {
   useEffect(() => {
     if (store.get('mandala-quest-intro', '') === 'seen') return;
     store.set('mandala-quest-intro', 'seen');
-    say('Welcome to the Living Valley!\nWalk with the D-pad or arrow keys, or tap the map to walk there.', { hold: 5200 });
-    say('Stand still inside a monument to record it.\nSTART opens the menu. SELECT shows the area map.', { hold: 5200 });
+    say('Welcome to the Living Valley!\nWalk with the arrow keys (or the D-pad on a phone), or tap the map to walk there.', { hold: 5200 });
+    say('Stand still inside a monument to record it.\nMenu (Enter) has your Dex, badges and bag.', { hold: 5200 });
   }, [say]);
 
   // Rank-ups and badges, announced when they change (not on page load).
@@ -188,7 +188,7 @@ export default function App() {
           const xp = XP.unlock + (m.zGate ? XP.zGateBonus : 0);
           earnedXp += xp;
           const bonus = festivalBonus(s.progress, xp);
-          say(`You discovered ${m.name.toUpperCase()}!\n+${xp + bonus} PUNYA${bonus ? ` (${FESTIVAL.multiplier}×)` : ''}  +${KALA.unlock} KALA\nPress A to read its DEX entry${m.riddle ? ' and riddle' : ''}.`, { hold: 5200 });
+          say(`You discovered ${m.name.toUpperCase()}!\n+${xp + bonus} PUNYA${bonus ? ` (${FESTIVAL.multiplier}×)` : ''}  +${KALA.unlock} KALA\nPress Read (X) for its Dex entry${m.riddle ? ' and riddle' : ''}.`, { hold: 5200 });
         }
       }
 
@@ -236,7 +236,7 @@ export default function App() {
         const prevC = s.chariotLive;
         if (r.inside && !prevC?.inside) {
           entries.push({ tone: 'info', text: `Inside the chariot’s ${CHARIOT.radius} m circle` });
-          say(`Bungadyah's chariot rolls past!\nPress A to fall in step with the pullers (${CHARIOT.speed} m/s), then walk with it.`, { hold: 5200 });
+          say(`Bungadyah's chariot rolls past!\nPress Read (X) to fall in step with the pullers (${CHARIOT.speed} m/s), then walk with it.`, { hold: 5200 });
         }
         if (!r.inside && prevC?.inside) entries.push({ tone: 'muted', text: 'Left the chariot’s circle' });
         if (r.inPace && !prevC?.inPace) entries.push({ tone: 'info', text: 'In pace with Bungadyah: keep pulling' });
@@ -491,7 +491,7 @@ export default function App() {
       setCard('boudha');
       return;
     }
-    say('Nothing to read here.\nWalk into a monument’s outline, then press A.');
+    say('Nothing to read here.\nWalk into a monument’s outline, then press Read (X).');
   };
 
   // ------------------------------------------------ buttons (screen + keyboard)
@@ -583,14 +583,14 @@ export default function App() {
   if (cluster === 'patan' && jatra && chariotLive?.inside) {
     status = chariotLive.inPace
       ? { tone: 'good', title: 'PULLING', bar: Math.min(1, chariotLive.t / CHARIOT.holdSeconds) }
-      : { tone: 'warn', title: 'CHARIOT', detail: `A: match ${CHARIOT.speed} m/s` };
+      : { tone: 'warn', title: 'CHARIOT', detail: `Read: match ${CHARIOT.speed} m/s` };
   } else if (cluster === 'patan' && insideId) {
     const st = dwell[insideId];
     const name = BY_ID[insideId].name.toUpperCase();
     if (st.status === 'dwelling' || st.status === 'grace') status = { tone: 'info', title: name, bar: st.t / DWELL_SECONDS };
     else if (st.status === 'too-fast') status = { tone: 'warn', title: name, detail: 'TOO FAST' };
-    else if (st.status === 'need-descent') status = { tone: 'warn', title: name, detail: zOpen ? '…' : 'HOLD L ▼' };
-    else if (st.status === 'unlocked') status = { tone: 'good', title: `★ ${name}`, detail: 'A: DEX' };
+    else if (st.status === 'need-descent') status = { tone: 'warn', title: name, detail: zOpen ? '…' : 'HOLD STEPS ▼' };
+    else if (st.status === 'unlocked') status = { tone: 'good', title: `★ ${name}`, detail: 'READ: DEX' };
   } else if (cluster === 'boudha' && koraLive) {
     status = koraLive.inRing
       ? { tone: koraLive.tooFast ? 'warn' : 'info', title: `KORA ${SECTOR_NAMES[koraLive.sector]}`, detail: `θ ${progress.kora.theta >= 0 ? '+' : ''}${Math.round(progress.kora.theta)}°` }
@@ -654,13 +654,26 @@ export default function App() {
           <p className="text-sm text-muted">Chronicles of the Living Valley</p>
         </div>
         <p className="hidden max-w-md text-right text-xs leading-relaxed text-faint md:block">
-          Arrows / WASD walk · X = A (read) · Z = B (run) · Q / E = L / R (down / up) · Enter = START · Shift = SELECT
+          Walk with the arrow keys or WASD, or tap the map. X reads, Z runs, Q / E go down / up steps, Enter opens the menu.
         </p>
       </header>
 
       <main className="mx-auto grid max-w-[1400px] gap-5 px-4 lg:grid-cols-[minmax(0,1fr)_340px]">
         <section className="min-w-0">
-          <Shell screen={screen} press={press} release={release} />
+          <GameFrame
+            screen={screen}
+            press={press}
+            release={release}
+            cluster={cluster}
+            onCluster={(c) => {
+              setCluster(c);
+              setTarget(null);
+            }}
+            layer={layer}
+            onLayer={setLayer}
+            jatra={jatra}
+            onJatra={toggleJatra}
+          />
         </section>
 
         <aside className="min-w-0 space-y-4">
@@ -719,7 +732,7 @@ function dwellLine({ id, from, to }) {
   const name = BY_ID[id].name.toUpperCase();
   if (to === 'dwelling' && from === 'idle') return `This is ${name}.\nStand still for ${DWELL_SECONDS} seconds to record it.`;
   if (to === 'too-fast') return `Too fast! Slow to walking pace to study ${name}.`;
-  if (to === 'need-descent') return `${name} lies below the street.\nHold L to walk down the steps (${Z_GATE.depthMeters.toFixed(1)} m).`;
+  if (to === 'need-descent') return `${name} lies below the street.\nHold Steps ▼ (Q) to walk down to ${Z_GATE.depthMeters.toFixed(1)} m.`;
   return null;
 }
 

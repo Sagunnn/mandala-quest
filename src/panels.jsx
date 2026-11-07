@@ -1,4 +1,4 @@
-/** Panels shared by the console: lore cards, the Kala shop and the field notebook. */
+/** Panels shared by the game: lore cards, the Kala shop and the field notebook. */
 import { useEffect, useRef, useState } from 'react';
 import {
   Check, Coins, FileText, Footprints, Hammer, HeartHandshake, History, Lock, Satellite, ScanSearch, ScrollText, Ticket, Timer,

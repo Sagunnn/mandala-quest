@@ -1,6 +1,6 @@
 /**
- * The handheld: shell and buttons, the game screen (a camera that follows the player over the
- * pixel overworld), the HUD, the typewriter text box, and the START menu pages.
+ * The game screen (a camera that follows the player over the pixel overworld), its toolbar and
+ * action buttons, the HUD, the typewriter text box, and the menu pages.
  */
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -12,7 +12,8 @@ import { PPM, renderBoudha, renderPatan } from './pixel/raster.js';
 import { ChariotSprite, Crowd, Trainer } from './pixel/sprites.jsx';
 import { Droplets, Flag, HeartHandshake, Landmark, RotateCw } from 'lucide-react';
 
-const VIEW_W = { patan: 46, boudha: 58 }; // metres across the screen when following the player
+const VIEW_W = { patan: 40, boudha: 52 }; // metres across a phone-width screen when following the player
+const MAX_PX_PER_M = 13; // wider screens show more of the area instead of zooming in
 export const LAYER_NAMES = { pixel: 'PIXEL', osm: 'OSM', satellite: 'SATELLITE' };
 export const AREA_NAMES = { patan: 'PATAN DURBAR SQ.', boudha: 'BOUDHANATH KORA' };
 
@@ -95,7 +96,7 @@ export function Screen(props) {
     cx = P.w / 2;
     cy = P.h / 2;
   } else {
-    s = size.w / VIEW_W[cluster];
+    s = Math.min(size.w / VIEW_W[cluster], MAX_PX_PER_M);
     const vw = size.w / s;
     const vh = size.h / s;
     cx = vw >= P.w ? P.w / 2 : Math.min(P.w - vw / 2, Math.max(vw / 2, pxy[0]));
@@ -328,7 +329,7 @@ export function TextBox({ message, onNext }) {
   );
 }
 
-// ---------------------------------------------------------------- START menu
+// ---------------------------------------------------------------- menu
 
 export const MENU = ['DEX', 'BADGES', 'BAG', 'TRAVEL', 'JATRA', 'MAP', 'RESET', 'EXIT'];
 
@@ -376,7 +377,7 @@ export function DexPage({ index, progress, player, onOpen, onClose }) {
         ))}
       </div>
       <button type="button" onClick={onClose} className="mt-1.5 self-end px-2 font-display text-[9px] text-white">
-        B: BACK
+        ◀ BACK (Z)
       </button>
     </div>
   );
@@ -426,13 +427,13 @@ export function BadgePage({ score, progress, onClose }) {
         </div>
       </div>
       <button type="button" onClick={onClose} className="mt-1.5 self-end px-2 font-display text-[9px] text-white">
-        B: BACK
+        ◀ BACK (Z)
       </button>
     </div>
   );
 }
 
-// ---------------------------------------------------------------- shell + buttons
+// ---------------------------------------------------------------- frame: toolbar, screen, action bar
 
 function HoldButton({ onDown, onUp, className, label, children, title }) {
   return (
@@ -456,87 +457,72 @@ function HoldButton({ onDown, onUp, className, label, children, title }) {
   );
 }
 
-function DPad({ press, release }) {
-  const btn = (dir, cls, glyph) => (
-    <HoldButton label={`D-pad ${dir}`} title={`${dir} (arrow keys / WASD)`} onDown={() => press(dir)} onUp={() => release(dir)} className={`gb-dpad ${cls}`}>
-      <span className="text-[10px] text-[#8a8fa8]">{glyph}</span>
+/** Small D-pad, shown on touch screens only (keyboards use arrows / WASD). */
+function TouchPad({ press, release }) {
+  const btn = (dir, glyph) => (
+    <HoldButton label={`Walk ${dir}`} onDown={() => press(dir)} onUp={() => release(dir)} className="gb-btn grid place-items-center !p-0 text-xs">
+      {glyph}
     </HoldButton>
   );
   return (
-    <div className="grid size-32 grid-cols-3 grid-rows-3 sm:size-36">
+    <div className="hidden size-28 shrink-0 grid-cols-3 grid-rows-3 gap-0.5 pointer-coarse:grid">
       <span />
-      {btn('up', 'rounded-t-md', '▲')}
+      {btn('up', '▲')}
       <span />
-      {btn('left', 'rounded-l-md', '◀')}
-      <span className="bg-[#2a2c38]" />
-      {btn('right', 'rounded-r-md', '▶')}
+      {btn('left', '◀')}
       <span />
-      {btn('down', 'rounded-b-md', '▼')}
+      {btn('right', '▶')}
+      <span />
+      {btn('down', '▼')}
       <span />
     </div>
   );
 }
 
-export function Shell({ screen, press, release }) {
-  const round = (name, key, cls) => (
-    <div className="flex flex-col items-center gap-1">
-      <HoldButton label={`${name} button (${key})`} onDown={() => press(name.toLowerCase())} onUp={() => release(name.toLowerCase())} className={`gb-round ${cls}`}>
-        {name}
-      </HoldButton>
-      <span className="font-display text-[7px] text-white/60">{key}</span>
-    </div>
-  );
-  const pill = (name, key) => (
-    <div className="flex flex-col items-center gap-3">
-      <HoldButton label={`${name} (${key})`} title={`${name} (${key})`} onDown={() => press(name.toLowerCase())} onUp={() => release(name.toLowerCase())} className="gb-pill" />
-      <span className="font-display text-[7px] tracking-wider text-white/80">{name}</span>
-    </div>
-  );
-  const shoulder = (name, key, side) => (
-    <HoldButton
-      label={`${name} shoulder (${key}): ${name === 'L' ? 'walk down' : 'walk up'}`}
-      onDown={() => press(name.toLowerCase())}
-      onUp={() => release(name.toLowerCase())}
-      className={`gb-shoulder ${side}`}
-    >
-      {name} <span className="text-[8px] opacity-70">{name === 'L' ? '▼' : '▲'}</span>
-    </HoldButton>
-  );
+const ACTIONS = [
+  { btn: 'a', label: 'Read', key: 'X', title: 'Read the monument you stand in, next line of text, or fall in step with the chariot' },
+  { btn: 'b', label: 'Run', key: 'Z', title: 'Hold to run (too fast for the timers)' },
+  { btn: 'l', label: 'Steps ▼', key: 'Q', title: 'Hold to walk down (barometer)' },
+  { btn: 'r', label: 'Steps ▲', key: 'E', title: 'Hold to walk up (barometer)' },
+  { btn: 'select', label: 'Area map', key: 'Shift', title: 'Show the whole area' },
+  { btn: 'start', label: 'Menu', key: 'Enter', title: 'Dex, badges, bag and more' },
+];
+
+export function GameFrame({ screen, press, release, cluster, onCluster, layer, onLayer, jatra, onJatra }) {
   return (
-    <div className="gb-shell relative mx-auto w-full max-w-[980px] px-3 pb-5 pt-7 sm:px-6">
-      {shoulder('L', 'Q', 'left-6')}
-      {shoulder('R', 'E', 'right-6')}
-      <div className="grid items-center gap-4 md:grid-cols-[auto_minmax(0,1fr)_auto]">
-        <div className="order-2 hidden justify-center md:order-1 md:flex">
-          <DPad press={press} release={release} />
+    <div className="overflow-hidden rounded-xl border-4 border-[#2b3a67] bg-[#2b3a67] shadow-[0_6px_0_rgba(0,0,0,0.35)]">
+      <div className="flex flex-wrap items-center gap-2 px-2 pb-2 pt-1.5">
+        <div className="flex gap-1" role="tablist" aria-label="Area">
+          {['patan', 'boudha'].map((c) => (
+            <button key={c} type="button" role="tab" aria-selected={cluster === c} onClick={() => onCluster(c)} className={`gb-btn ${cluster === c ? '!bg-[#f6d77a]' : ''}`}>
+              {c === 'patan' ? 'Patan Durbar Square' : 'Boudhanath Kora'}
+            </button>
+          ))}
         </div>
-        <div className="order-1 md:order-2">
-          <div className="gb-bezel">
-            <div className="mb-1.5 flex items-center gap-2 px-1">
-              <span className="size-2 rounded-full bg-[#5fe08a] shadow-[0_0_6px_#5fe08a]" aria-hidden />
-              <span className="font-display text-[7px] tracking-widest text-[#9aa0c0]">MANDALA QUEST · LIVING VALLEY</span>
-            </div>
-            <div className="aspect-[4/3] w-full overflow-hidden rounded-sm bg-black sm:aspect-[3/2]">{screen}</div>
-          </div>
+        <div className="flex gap-1" role="radiogroup" aria-label="Map layer">
+          {Object.entries(LAYER_NAMES).map(([id, name]) => (
+            <button key={id} type="button" role="radio" aria-checked={layer === id} onClick={() => onLayer(id)} className={`gb-btn !px-2 ${layer === id ? '!bg-[#f6d77a]' : ''}`}>
+              {id === 'osm' ? 'OSM' : name[0] + name.slice(1).toLowerCase()}
+            </button>
+          ))}
         </div>
-        <div className="order-3 hidden flex-col items-center gap-5 md:flex">
-          <div className="flex items-end gap-3">
-            <div className="translate-y-4">{round('B', 'Z · run', 'bg-[#6b2c8a]')}</div>
-            {round('A', 'X', 'bg-[#6b2c8a]')}
-          </div>
-        </div>
-        {/* phone layout: controls under the screen */}
-        <div className="order-2 flex items-center justify-between px-1 md:hidden">
-          <DPad press={press} release={release} />
-          <div className="flex items-end gap-3">
-            <div className="translate-y-4">{round('B', 'run', 'bg-[#6b2c8a]')}</div>
-            {round('A', '', 'bg-[#6b2c8a]')}
-          </div>
-        </div>
+        <button type="button" onClick={onJatra} aria-pressed={jatra} className={`gb-btn ml-auto ${jatra ? '!border-[#7a1e14] !bg-[#c4322a] !text-white' : ''}`}>
+          Live Jatra {jatra ? 'ON' : 'OFF'}
+        </button>
       </div>
-      <div className="mt-3 flex justify-center gap-8">
-        {pill('SELECT', 'Shift')}
-        {pill('START', 'Enter')}
+
+      <div className="aspect-[4/3] w-full overflow-hidden rounded-md sm:aspect-[16/10]">{screen}</div>
+
+      <div className="flex items-center gap-3 px-2 pb-1.5 pt-2">
+        <TouchPad press={press} release={release} />
+        <div className="flex flex-1 flex-wrap gap-1.5">
+          {ACTIONS.map((a) => (
+            <HoldButton key={a.btn} label={`${a.label} (${a.key})`} title={`${a.title} · key ${a.key}`} onDown={() => press(a.btn)} onUp={() => release(a.btn)} className="gb-btn flex items-center gap-1.5">
+              {a.label}
+              <kbd className="rounded bg-[#2b3a67]/10 px-1 font-mono text-[10px] text-[#5a5f7a] pointer-coarse:hidden">{a.key}</kbd>
+            </HoldButton>
+          ))}
+        </div>
       </div>
     </div>
   );

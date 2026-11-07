@@ -1472,13 +1472,17 @@ function LoreCard({ id, progress, player, canWalk, onWalk, onSolve, onClose }) {
   const lore = isBoudha ? BOUDHA.lore : m.lore;
   const dist = player ? distanceMeters(player, isBoudha ? BOUDHA.center : m.centroid) : null;
   const ref = useRef(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
 
+  // The app redraws every second, so focus moves to the card only when it opens.
+  // Doing it on every redraw pulled the cursor out of the riddle box mid-typing.
   useEffect(() => {
-    const onKey = (e) => e.key === 'Escape' && onClose();
+    const onKey = (e) => e.key === 'Escape' && closeRef.current();
     window.addEventListener('keydown', onKey);
     ref.current?.focus();
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [id]);
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-end bg-black/60 p-0 sm:place-items-center sm:p-4" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
